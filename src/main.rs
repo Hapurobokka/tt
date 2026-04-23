@@ -1,29 +1,66 @@
 use std::io;
 
-use crossterm::{
-    event::{self, Event, KeyCode},
-};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
     layout::{Rect, Size},
+    style::Color,
     symbols::border,
     text::Line,
     widgets::{Block, Widget},
 };
 
 #[derive(Debug, Default)]
+pub struct Cell {
+    bg_color: Color,
+    character: char,
+}
+
+#[derive(Debug, Default)]
 pub struct App {
     exit: bool,
     player_x: u16,
     player_y: u16,
+    cells: Vec<Vec<Cell>>,
+    curr_color: Color,
+    color_i: usize,
+    painting: bool,
+    deleting: bool,
 }
+const PALETTE: [Color; 8] = [
+    Color::White,
+    Color::Black,
+    Color::Red,
+    Color::Blue,
+    Color::Green,
+    Color::Yellow,
+    Color::Magenta,
+    Color::Gray,
+];
 
 impl App {
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
+        let s = terminal.size()?;
+        for _ in 1..s.width - 1 {
+            let mut cs = Vec::<Cell>::new();
+            for _ in 1..s.height - 1 {
+                cs.push(Cell {
+                    bg_color: Color::Reset,
+                    character: '.',
+                });
+            }
+            self.cells.push(cs);
+        }
+
         while !self.exit {
             terminal.draw(|frame| self.draw(frame))?;
-            self.handle_events(terminal.size()?)?;
+            self.handle_events(s)?;
+            if self.painting {
+                self.paint(self.curr_color);
+            } else if self.deleting {
+                self.paint(Color::Reset);
+            }
         }
         Ok(())
     }
@@ -34,33 +71,71 @@ impl App {
 
     fn handle_events(&mut self, size: Size) -> io::Result<()> {
         match event::read()? {
-            Event::Key(key_event) => match key_event.code {
-                KeyCode::Char('q') => self.exit = true,
-                KeyCode::Left | KeyCode::Char('h') => {
-                    if self.player_x > 1 {
-                        self.player_x -= 1
-                    }
-                }
-                KeyCode::Right | KeyCode::Char('l') => {
-                    if self.player_x + 1 <= size.width - 2 {
-                        self.player_x += 1
-                    }
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    if self.player_y > 1 {
-                        self.player_y -= 1
-                    }
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    if self.player_y + 1 <= size.height - 2 {
-                        self.player_y += 1
-                    }
-                }
-                _ => {}
-            },
+            Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
+                self.handle_key_press(key_event, size);
+            }
             _ => {}
         }
         Ok(())
+    }
+
+    fn paint(&mut self, color: Color) {
+        self.cells[self.player_x as usize - 1][self.player_y as usize - 1].bg_color = color
+    }
+
+    fn handle_key_press(&mut self, key_event: KeyEvent, size: Size) {
+        match key_event.code {
+            KeyCode::Char('q') => self.exit = true,
+            KeyCode::Left | KeyCode::Char('h') => {
+                if self.player_x > 1 {
+                    self.player_x -= 1
+                }
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if self.player_x <= size.width - 3 {
+                    self.player_x += 1
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.player_y > 1 {
+                    self.player_y -= 1
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.player_y <= size.height - 3 {
+                    self.player_y += 1
+                }
+            }
+            KeyCode::BackTab => {
+                if self.color_i == 0 {
+                    self.color_i = PALETTE.len() - 1
+                } else {
+                    self.color_i -= 1
+                }
+                self.curr_color = PALETTE[self.color_i];
+            }
+            KeyCode::Tab => {
+                if self.color_i == PALETTE.len() - 1 {
+                    self.color_i = 0
+                } else {
+                    self.color_i += 1
+                }
+                self.curr_color = PALETTE[self.color_i];
+            }
+            KeyCode::Char(' ') => {
+                if self.deleting {
+                    self.deleting = false;
+                }
+                self.painting = !self.painting;
+            }
+            KeyCode::Char('x') => {
+                if self.painting {
+                    self.painting = false;
+                }
+                self.deleting = !self.deleting;
+            }
+            _ => {}
+        }
     }
 }
 
@@ -68,15 +143,33 @@ impl Widget for &App {
     fn render(self, area: Rect, buf: &mut Buffer) {
         for x in 1..area.width - 1 {
             for y in 1..area.height - 1 {
-                buf[(area.x + x, area.y + y)].set_char('.');
+                let (dx, dy) = (area.x + x, area.y + y);
+                let (nx, ny) = (x as usize - 1, y as usize - 1);
+                buf[(dx, dy)].set_char(self.cells[nx][ny].character);
+                buf[(dx, dy)].set_bg(self.cells[nx][ny].bg_color);
             }
         }
 
         buf[(area.x + self.player_x, area.y + self.player_y)].set_char('@');
 
-        let title = Line::from("Prueba");
+        let title = Line::from(if self.painting {
+            "PAINTING"
+        } else if self.deleting {
+            "DELETING "
+        } else {
+            "TEST"
+        });
+        let current_color = Line::from(format!("COLOR: {}", self.curr_color));
         let block = Block::bordered()
-            .title(title.centered())
+            .title(title)
+            .title_bottom(current_color)
+            .border_style(if self.painting {
+                Color::Magenta
+            } else if self.deleting {
+                Color::Red
+            } else {
+                Color::White
+            })
             .border_set(border::THICK);
         block.render(area, buf);
     }
@@ -87,6 +180,11 @@ fn main() -> io::Result<()> {
         exit: false,
         player_x: 1,
         player_y: 1,
+        cells: Vec::<Vec<Cell>>::new(),
+        curr_color: Color::White,
+        color_i: 0,
+        painting: false,
+        deleting: false,
     };
     ratatui::run(|terminal| app.run(terminal))
 }

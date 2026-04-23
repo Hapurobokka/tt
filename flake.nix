@@ -19,6 +19,7 @@
             clippy
             rustfmt
             rustPlatform.rustLibSrc  # ← esto es rust-src en nixpkgs vanilla!
+            bacon
           ];
 
           RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
