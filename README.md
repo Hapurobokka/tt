@@ -72,9 +72,9 @@ y un color de foreground. El cursor sigue existiendo independientemente de los t
 - [x] El `App` tiene un `Vec<Token>` para almacenar todos los tokens
 - [x] Presionar `t` coloca un nuevo token en la posición del cursor (carácter y color por defecto)
 - [x] Los tokens se renderizan encima del grid (su carácter reemplaza visualmente lo que haya en esa celda)
-- [ ] Si el cursor está sobre una celda con un token y se presiona `Enter`, ese token queda **seleccionado**
-- [ ] Con un token seleccionado, `hjkl` y las flechas mueven el token (el cursor va con él)
-- [ ] Presionar `Enter` o `Escape` suelta el token seleccionado (vuelve a modo navigate)
+- [x] Si el cursor está sobre una celda con un token y se presiona `Enter`, ese token queda **seleccionado**
+- [x] Con un token seleccionado, `hjkl` y las flechas mueven el token (el cursor va con él)
+- [x] Presionar `Enter` o `Escape` suelta el token seleccionado (vuelve a modo navigate)
 - [x] Presionar `d` cuando el cursor está sobre un token lo elimina
 - [ ] No pueden existir dos tokens en la misma celda (al mover o colocar, verificar colisión)
 

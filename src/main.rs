@@ -1,3 +1,4 @@
+use std::fmt;
 use std::io;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
@@ -29,11 +30,25 @@ pub struct Cell {
 }
 
 #[derive(Debug)]
+struct Cursor {
+    x: u16,
+    y: u16,
+    character: char,
+    fg_color: Color,
+}
+
+#[derive(Debug)]
 struct Token {
     x: u16,
     y: u16,
     character: char,
     fg_color: Color,
+}
+
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "'{}' ({}, {})", self.character, self.x, self.y)
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -48,8 +63,7 @@ use State::*;
 #[derive(Debug)]
 pub struct App {
     exit: bool,
-    player_x: u16,
-    player_y: u16,
+    cursor: Cursor,
     cells: Vec<Vec<Cell>>,
     color_i: usize,
     state: State,
@@ -74,12 +88,8 @@ impl App {
             terminal.draw(|frame| self.draw(frame))?;
             self.handle_events(s)?;
             match self.state {
-                Drawing(c) => {
-                    self.paint(c);
-                }
-                Deleting => {
-                    self.paint(Color::Reset);
-                }
+                Drawing(c) => self.paint(c),
+                Deleting => self.paint(Color::Reset),
                 _ => {}
             }
         }
@@ -101,36 +111,48 @@ impl App {
     }
 
     fn paint(&mut self, color: Color) {
-        self.cells[self.player_x as usize - 1][self.player_y as usize - 1].bg_color = color
+        self.cells[self.cursor.x as usize - 1][self.cursor.y as usize - 1].bg_color = color
     }
 
     fn token_at(&self) -> Option<usize> {
         self.tokens
             .iter()
-            .position(|t| t.x == self.player_x && t.y == self.player_y)
+            .position(|t| t.x == self.cursor.x && t.y == self.cursor.y)
     }
 
     fn handle_key_press(&mut self, key_event: KeyEvent, size: Size) {
         match key_event.code {
             KeyCode::Char('q') => self.exit = true,
             KeyCode::Left | KeyCode::Char('h') => {
-                if self.player_x > 1 {
-                    self.player_x -= 1
+                if self.cursor.x > 1 {
+                    self.cursor.x -= 1
+                }
+                if let Moving(i) = self.state {
+                    self.tokens[i].x = self.cursor.x;
                 }
             }
             KeyCode::Right | KeyCode::Char('l') => {
-                if self.player_x <= size.width - 3 {
-                    self.player_x += 1
+                if self.cursor.x <= size.width - 3 {
+                    self.cursor.x += 1
+                }
+                if let Moving(i) = self.state {
+                    self.tokens[i].x = self.cursor.x;
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                if self.player_y > 1 {
-                    self.player_y -= 1
+                if self.cursor.y > 1 {
+                    self.cursor.y -= 1
+                }
+                if let Moving(i) = self.state {
+                    self.tokens[i].y = self.cursor.y;
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.player_y <= size.height - 3 {
-                    self.player_y += 1
+                if self.cursor.y <= size.height - 3 {
+                    self.cursor.y += 1
+                }
+                if let Moving(i) = self.state {
+                    self.tokens[i].y = self.cursor.y;
                 }
             }
             KeyCode::BackTab => {
@@ -138,6 +160,9 @@ impl App {
                     self.color_i = PALETTE.len() - 1
                 } else {
                     self.color_i -= 1
+                }
+                if let Drawing(_) = self.state {
+                    self.state = Drawing(PALETTE[self.color_i])
                 }
             }
             KeyCode::Tab => {
@@ -163,12 +188,14 @@ impl App {
                 }
             }
             KeyCode::Char('t') => {
-                self.tokens.push(Token {
-                    x: self.player_x,
-                    y: self.player_y,
-                    character: 't',
-                    fg_color: Color::Red,
-                });
+                if self.state == Normal {
+                    self.tokens.push(Token {
+                        x: self.cursor.x,
+                        y: self.cursor.y,
+                        character: 't',
+                        fg_color: Color::Red,
+                    });
+                }
             }
             KeyCode::Char('d') => {
                 if let Some(i) = self.token_at()
@@ -178,14 +205,14 @@ impl App {
                 }
             }
             KeyCode::Char('m') => match self.state {
-                Moving(i) => {
-                    self.tokens[i].x = self.player_x;
-                    self.tokens[i].y = self.player_y;
-                    self.state = Normal
+                Moving(_) => {
+                    self.state = Normal;
+                    self.cursor.character = '@';
                 }
                 _ => {
                     if let Some(i) = self.token_at() {
-                        self.state = Moving(i)
+                        self.state = Moving(i);
+                        self.cursor.character = self.tokens[i].character;
                     }
                 }
             },
@@ -211,7 +238,9 @@ impl Widget for &App {
             buf[(t.x, t.y)].set_char(t.character).set_fg(t.fg_color);
         }
 
-        buf[(area.x + self.player_x, area.y + self.player_y)].set_char('@');
+        buf[(area.x + self.cursor.x, area.y + self.cursor.y)]
+            .set_char(self.cursor.character)
+            .set_fg(self.cursor.fg_color);
 
         let title = Line::from(match self.state {
             Drawing(_) => "DRAWING",
@@ -223,7 +252,9 @@ impl Widget for &App {
         let current_color = Line::from(format!(
             "COLOR: {} | {}",
             PALETTE[self.color_i],
-            self.token_at().is_some()
+            self.token_at()
+                .map(|i| self.tokens[i].to_string())
+                .unwrap_or_default()
         ));
 
         let block = Block::bordered()
@@ -243,8 +274,12 @@ impl Widget for &App {
 fn main() -> io::Result<()> {
     let mut app = App {
         exit: false,
-        player_x: 1,
-        player_y: 1,
+        cursor: Cursor {
+            x: 1,
+            y: 1,
+            character: '@',
+            fg_color: Color::Yellow,
+        },
         cells: Vec::new(),
         tokens: Vec::new(),
         color_i: 0,
