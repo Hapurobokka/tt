@@ -80,8 +80,7 @@ impl App {
                 Deleting => {
                     self.paint(Color::Reset);
                 }
-                Moving(_) => todo!(),
-                Normal => {}
+                _ => {}
             }
         }
         Ok(())
@@ -103,6 +102,12 @@ impl App {
 
     fn paint(&mut self, color: Color) {
         self.cells[self.player_x as usize - 1][self.player_y as usize - 1].bg_color = color
+    }
+
+    fn token_at(&self) -> Option<usize> {
+        self.tokens
+            .iter()
+            .position(|t| t.x == self.player_x && t.y == self.player_y)
     }
 
     fn handle_key_press(&mut self, key_event: KeyEvent, size: Size) {
@@ -165,6 +170,25 @@ impl App {
                     fg_color: Color::Red,
                 });
             }
+            KeyCode::Char('d') => {
+                if let Some(i) = self.token_at()
+                    && self.state == Normal
+                {
+                    self.tokens.remove(i);
+                }
+            }
+            KeyCode::Char('m') => match self.state {
+                Moving(i) => {
+                    self.tokens[i].x = self.player_x;
+                    self.tokens[i].y = self.player_y;
+                    self.state = Normal
+                }
+                _ => {
+                    if let Some(i) = self.token_at() {
+                        self.state = Moving(i)
+                    }
+                }
+            },
             KeyCode::Esc => self.state = Normal,
             _ => {}
         }
@@ -189,24 +213,27 @@ impl Widget for &App {
 
         buf[(area.x + self.player_x, area.y + self.player_y)].set_char('@');
 
-        let title = Line::from(if let Drawing(__) = self.state {
-            "DRAWING"
-        } else if self.state == Deleting {
-            "DELETING "
-        } else {
-            "TEST"
+        let title = Line::from(match self.state {
+            Drawing(_) => "DRAWING",
+            Deleting => "DELETING",
+            Normal => "EXPLORING",
+            Moving(_) => "MOVING",
         });
 
-        let current_color = Line::from(format!("COLOR: {}", PALETTE[self.color_i]));
+        let current_color = Line::from(format!(
+            "COLOR: {} | {}",
+            PALETTE[self.color_i],
+            self.token_at().is_some()
+        ));
+
         let block = Block::bordered()
             .title(title)
             .title_bottom(current_color)
-            .border_style(if let Drawing(__) = self.state {
-                Color::Magenta
-            } else if self.state == Deleting {
-                Color::Red
-            } else {
-                Color::White
+            .border_style(match self.state {
+                Drawing(_) => Color::Magenta,
+                Deleting => Color::Red,
+                Moving(_) => Color::Yellow,
+                Normal => Color::White,
             })
             .border_set(border::THICK);
         block.render(area, buf);
@@ -219,9 +246,9 @@ fn main() -> io::Result<()> {
         player_x: 1,
         player_y: 1,
         cells: Vec::new(),
+        tokens: Vec::new(),
         color_i: 0,
         state: Normal,
-        tokens: Vec::new(),
     };
     ratatui::run(|terminal| app.run(terminal))
 }

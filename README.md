@@ -75,7 +75,7 @@ y un color de foreground. El cursor sigue existiendo independientemente de los t
 - [ ] Si el cursor está sobre una celda con un token y se presiona `Enter`, ese token queda **seleccionado**
 - [ ] Con un token seleccionado, `hjkl` y las flechas mueven el token (el cursor va con él)
 - [ ] Presionar `Enter` o `Escape` suelta el token seleccionado (vuelve a modo navigate)
-- [ ] Presionar `d` cuando el cursor está sobre un token lo elimina
+- [x] Presionar `d` cuando el cursor está sobre un token lo elimina
 - [ ] No pueden existir dos tokens en la misma celda (al mover o colocar, verificar colisión)
 
 ### Criterio de éxito
