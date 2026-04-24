@@ -11,23 +11,6 @@ use ratatui::{
     widgets::{Block, Widget},
 };
 
-#[derive(Debug, Default)]
-pub struct Cell {
-    bg_color: Color,
-    character: char,
-}
-
-#[derive(Debug, Default)]
-pub struct App {
-    exit: bool,
-    player_x: u16,
-    player_y: u16,
-    cells: Vec<Vec<Cell>>,
-    curr_color: Color,
-    color_i: usize,
-    painting: bool,
-    deleting: bool,
-}
 const PALETTE: [Color; 8] = [
     Color::White,
     Color::Black,
@@ -38,6 +21,40 @@ const PALETTE: [Color; 8] = [
     Color::Magenta,
     Color::Gray,
 ];
+
+#[derive(Debug, Default)]
+pub struct Cell {
+    bg_color: Color,
+    character: char,
+}
+
+#[derive(Debug)]
+struct Token {
+    x: u16,
+    y: u16,
+    character: char,
+    fg_color: Color,
+}
+
+#[derive(Debug, PartialEq)]
+enum State {
+    Normal,
+    Drawing(Color),
+    Deleting,
+    Moving(usize),
+}
+use State::*;
+
+#[derive(Debug)]
+pub struct App {
+    exit: bool,
+    player_x: u16,
+    player_y: u16,
+    cells: Vec<Vec<Cell>>,
+    color_i: usize,
+    state: State,
+    tokens: Vec<Token>,
+}
 
 impl App {
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
@@ -56,10 +73,15 @@ impl App {
         while !self.exit {
             terminal.draw(|frame| self.draw(frame))?;
             self.handle_events(s)?;
-            if self.painting {
-                self.paint(self.curr_color);
-            } else if self.deleting {
-                self.paint(Color::Reset);
+            match self.state {
+                Drawing(c) => {
+                    self.paint(c);
+                }
+                Deleting => {
+                    self.paint(Color::Reset);
+                }
+                Moving(_) => todo!(),
+                Normal => {}
             }
         }
         Ok(())
@@ -112,7 +134,6 @@ impl App {
                 } else {
                     self.color_i -= 1
                 }
-                self.curr_color = PALETTE[self.color_i];
             }
             KeyCode::Tab => {
                 if self.color_i == PALETTE.len() - 1 {
@@ -120,20 +141,31 @@ impl App {
                 } else {
                     self.color_i += 1
                 }
-                self.curr_color = PALETTE[self.color_i];
-            }
-            KeyCode::Char(' ') => {
-                if self.deleting {
-                    self.deleting = false;
+                if let Drawing(_) = self.state {
+                    self.state = Drawing(PALETTE[self.color_i])
                 }
-                self.painting = !self.painting;
             }
+            KeyCode::Char(' ') => match self.state {
+                Drawing(_) => self.state = Normal,
+                Normal | Deleting => self.state = Drawing(PALETTE[self.color_i]),
+                _ => {}
+            },
             KeyCode::Char('x') => {
-                if self.painting {
-                    self.painting = false;
+                if self.state == Deleting {
+                    self.state = Normal
+                } else {
+                    self.state = Deleting;
                 }
-                self.deleting = !self.deleting;
             }
+            KeyCode::Char('t') => {
+                self.tokens.push(Token {
+                    x: self.player_x,
+                    y: self.player_y,
+                    character: 't',
+                    fg_color: Color::Red,
+                });
+            }
+            KeyCode::Esc => self.state = Normal,
             _ => {}
         }
     }
@@ -145,27 +177,33 @@ impl Widget for &App {
             for y in 1..area.height - 1 {
                 let (dx, dy) = (area.x + x, area.y + y);
                 let (nx, ny) = (x as usize - 1, y as usize - 1);
-                buf[(dx, dy)].set_char(self.cells[nx][ny].character);
-                buf[(dx, dy)].set_bg(self.cells[nx][ny].bg_color);
+                buf[(dx, dy)]
+                    .set_char(self.cells[nx][ny].character)
+                    .set_bg(self.cells[nx][ny].bg_color);
             }
+        }
+
+        for t in &self.tokens {
+            buf[(t.x, t.y)].set_char(t.character).set_fg(t.fg_color);
         }
 
         buf[(area.x + self.player_x, area.y + self.player_y)].set_char('@');
 
-        let title = Line::from(if self.painting {
-            "PAINTING"
-        } else if self.deleting {
+        let title = Line::from(if let Drawing(__) = self.state {
+            "DRAWING"
+        } else if self.state == Deleting {
             "DELETING "
         } else {
             "TEST"
         });
-        let current_color = Line::from(format!("COLOR: {}", self.curr_color));
+
+        let current_color = Line::from(format!("COLOR: {}", PALETTE[self.color_i]));
         let block = Block::bordered()
             .title(title)
             .title_bottom(current_color)
-            .border_style(if self.painting {
+            .border_style(if let Drawing(__) = self.state {
                 Color::Magenta
-            } else if self.deleting {
+            } else if self.state == Deleting {
                 Color::Red
             } else {
                 Color::White
@@ -180,11 +218,10 @@ fn main() -> io::Result<()> {
         exit: false,
         player_x: 1,
         player_y: 1,
-        cells: Vec::<Vec<Cell>>::new(),
-        curr_color: Color::White,
+        cells: Vec::new(),
         color_i: 0,
-        painting: false,
-        deleting: false,
+        state: Normal,
+        tokens: Vec::new(),
     };
     ratatui::run(|terminal| app.run(terminal))
 }

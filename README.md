@@ -49,3 +49,36 @@ El cursor sigue siendo `@`. Las celdas pintadas muestran su color. Las vacías s
 
 Puedo moverme por el grid, seleccionar colores con número, pintar celdas, borrarlas,
 y ver los colores reflejados en pantalla en tiempo real.
+
+---
+
+## Notas de diseño (para fases futuras)
+
+- **Modelo commit**: las acciones no se aplican hasta confirmar con `Space`/`Enter`.
+  `Escape` cancela y descarta los cambios. Implica estado "preview" o snapshot al entrar al modo.
+- **Undo stack**: cada acción confirmada empuja un `Action` (enum con variantes por tipo de cambio)
+  a un `Vec`. `u` hace pop y revierte. Se diseña junto con el modelo commit para que sean coherentes.
+
+---
+
+## Fase 3 — Tokens
+
+Los tokens son entidades que viven *sobre* el grid. Tienen posición, un carácter visual,
+y un color de foreground. El cursor sigue existiendo independientemente de los tokens.
+
+### Checklist
+
+- [x] Existe un struct `Token` con campos: `x: u16`, `y: u16`, `character: char`, `fg_color: Color`
+- [x] El `App` tiene un `Vec<Token>` para almacenar todos los tokens
+- [x] Presionar `t` coloca un nuevo token en la posición del cursor (carácter y color por defecto)
+- [x] Los tokens se renderizan encima del grid (su carácter reemplaza visualmente lo que haya en esa celda)
+- [ ] Si el cursor está sobre una celda con un token y se presiona `Enter`, ese token queda **seleccionado**
+- [ ] Con un token seleccionado, `hjkl` y las flechas mueven el token (el cursor va con él)
+- [ ] Presionar `Enter` o `Escape` suelta el token seleccionado (vuelve a modo navigate)
+- [ ] Presionar `d` cuando el cursor está sobre un token lo elimina
+- [ ] No pueden existir dos tokens en la misma celda (al mover o colocar, verificar colisión)
+
+### Criterio de éxito
+
+Puedo colocar tokens en el mapa, seleccionarlos, moverlos por el grid,
+y eliminarlos. Los tokens son visualmente distintos del cursor y del grid.
