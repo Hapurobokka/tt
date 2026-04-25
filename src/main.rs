@@ -2,6 +2,7 @@ use std::fmt;
 use std::io;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use ratatui::style::Modifier;
 use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
@@ -23,9 +24,12 @@ const PALETTE: [Color; 8] = [
     Color::Gray,
 ];
 
+const TERRAIN: [char; 8] = ['.', '#', '|', '"', '-', '+', '<', '>'];
+
 #[derive(Debug, Default)]
 pub struct Cell {
     bg_color: Color,
+    fg_color: Color,
     character: char,
 }
 
@@ -51,10 +55,17 @@ impl fmt::Display for Token {
     }
 }
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum Brush {
+    BgColor(Color),
+    FgColor(Color),
+    Char(char),
+}
+
 #[derive(Debug, PartialEq)]
 enum State {
     Normal,
-    Drawing(Color),
+    Drawing(Brush),
     Deleting,
     Moving(usize),
 }
@@ -65,9 +76,12 @@ pub struct App {
     exit: bool,
     cursor: Cursor,
     cells: Vec<Vec<Cell>>,
-    color_i: usize,
+    bg_color_i: usize,
+    fg_color_i: usize,
+    char_i: usize,
     state: State,
     tokens: Vec<Token>,
+    brush: Brush,
 }
 
 impl App {
@@ -77,8 +91,9 @@ impl App {
             let mut cs = Vec::<Cell>::new();
             for _ in 1..s.height - 1 {
                 cs.push(Cell {
+                    fg_color: Color::White,
                     bg_color: Color::Reset,
-                    character: '.',
+                    character: ' ',
                 });
             }
             self.cells.push(cs);
@@ -89,7 +104,7 @@ impl App {
             self.handle_events(s)?;
             match self.state {
                 Drawing(c) => self.paint(c),
-                Deleting => self.paint(Color::Reset),
+                Deleting => self.delete(),
                 _ => {}
             }
         }
@@ -110,8 +125,26 @@ impl App {
         Ok(())
     }
 
-    fn paint(&mut self, color: Color) {
-        self.cells[self.cursor.x as usize - 1][self.cursor.y as usize - 1].bg_color = color
+    fn paint(&mut self, brush: Brush) {
+        match brush {
+            Brush::BgColor(c) => {
+                self.cells[self.cursor.x as usize - 1][self.cursor.y as usize - 1].bg_color = c
+            }
+            Brush::Char(ch) => {
+                self.cells[self.cursor.x as usize - 1][self.cursor.y as usize - 1].character = ch
+            }
+            Brush::FgColor(c) => {
+                self.cells[self.cursor.x as usize - 1][self.cursor.y as usize - 1].fg_color = c
+            }
+        }
+    }
+
+    fn delete(&mut self) {
+        match self.brush {
+            Brush::BgColor(_) => self.paint(Brush::BgColor(Color::Reset)),
+            Brush::FgColor(_) => self.paint(Brush::BgColor(Color::White)),
+            Brush::Char(_) => self.paint(Brush::Char(' ')),
+        }
     }
 
     fn token_at(&self) -> Option<usize> {
@@ -120,64 +153,46 @@ impl App {
             .position(|t| t.x == self.cursor.x && t.y == self.cursor.y)
     }
 
+    fn move_cursor(&mut self, dx: i16, dy: i16, size: Size) {
+        let new_x = self.cursor.x as i16 + dx;
+        let new_y = self.cursor.y as i16 + dy;
+        if new_x >= 1 && new_x <= size.width as i16 - 2 {
+            self.cursor.x = new_x as u16;
+        }
+        if new_y >= 1 && new_y <= size.height as i16 - 2 {
+            self.cursor.y = new_y as u16;
+        }
+        if let Moving(i) = self.state {
+            self.tokens[i].x = self.cursor.x;
+            self.tokens[i].y = self.cursor.y;
+        }
+    }
+
+    fn sync_brush(&mut self) {
+        if let Drawing(_) = self.state {
+            self.state = Drawing(self.brush)
+        }
+    }
+
     fn handle_key_press(&mut self, key_event: KeyEvent, size: Size) {
         match key_event.code {
             KeyCode::Char('q') => self.exit = true,
-            KeyCode::Left | KeyCode::Char('h') => {
-                if self.cursor.x > 1 {
-                    self.cursor.x -= 1
-                }
-                if let Moving(i) = self.state {
-                    self.tokens[i].x = self.cursor.x;
-                }
-            }
-            KeyCode::Right | KeyCode::Char('l') => {
-                if self.cursor.x <= size.width - 3 {
-                    self.cursor.x += 1
-                }
-                if let Moving(i) = self.state {
-                    self.tokens[i].x = self.cursor.x;
-                }
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.cursor.y > 1 {
-                    self.cursor.y -= 1
-                }
-                if let Moving(i) = self.state {
-                    self.tokens[i].y = self.cursor.y;
-                }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.cursor.y <= size.height - 3 {
-                    self.cursor.y += 1
-                }
-                if let Moving(i) = self.state {
-                    self.tokens[i].y = self.cursor.y;
-                }
-            }
-            KeyCode::BackTab => {
-                if self.color_i == 0 {
-                    self.color_i = PALETTE.len() - 1
-                } else {
-                    self.color_i -= 1
-                }
-                if let Drawing(_) = self.state {
-                    self.state = Drawing(PALETTE[self.color_i])
-                }
-            }
+            KeyCode::Left | KeyCode::Char('h') => self.move_cursor(-1, 0, size),
+            KeyCode::Right | KeyCode::Char('l') => self.move_cursor(1, 0, size),
+            KeyCode::Up | KeyCode::Char('k') => self.move_cursor(0, -1, size),
+            KeyCode::Down | KeyCode::Char('j') => self.move_cursor(0, 1, size),
             KeyCode::Tab => {
-                if self.color_i == PALETTE.len() - 1 {
-                    self.color_i = 0
-                } else {
-                    self.color_i += 1
+                match self.brush {
+                    Brush::BgColor(_) => self.brush = Brush::FgColor(PALETTE[self.fg_color_i]),
+                    Brush::FgColor(_) => self.brush = Brush::Char(TERRAIN[self.char_i]),
+                    Brush::Char(_) => self.brush = Brush::BgColor(PALETTE[self.bg_color_i]),
                 }
-                if let Drawing(_) = self.state {
-                    self.state = Drawing(PALETTE[self.color_i])
-                }
+
+                self.sync_brush();
             }
             KeyCode::Char(' ') => match self.state {
                 Drawing(_) => self.state = Normal,
-                Normal | Deleting => self.state = Drawing(PALETTE[self.color_i]),
+                Normal | Deleting => self.state = Drawing(self.brush),
                 _ => {}
             },
             KeyCode::Char('x') => {
@@ -216,6 +231,24 @@ impl App {
                     }
                 }
             },
+            KeyCode::Char(c @ '1'..='8') => {
+                let i = (c as usize) - ('1' as usize);
+                self.brush = match self.brush {
+                    Brush::Char(_) => {
+                        self.char_i = i;
+                        Brush::Char(TERRAIN[self.char_i])
+                    }
+                    Brush::BgColor(_) => {
+                        self.bg_color_i = i;
+                        Brush::BgColor(PALETTE[self.bg_color_i])
+                    }
+                    Brush::FgColor(_) => {
+                        self.fg_color_i = i;
+                        Brush::FgColor(PALETTE[self.fg_color_i])
+                    }
+                };
+                self.sync_brush();
+            }
             KeyCode::Esc => self.state = Normal,
             _ => {}
         }
@@ -230,17 +263,22 @@ impl Widget for &App {
                 let (nx, ny) = (x as usize - 1, y as usize - 1);
                 buf[(dx, dy)]
                     .set_char(self.cells[nx][ny].character)
-                    .set_bg(self.cells[nx][ny].bg_color);
+                    .set_bg(self.cells[nx][ny].bg_color)
+                    .set_fg(self.cells[nx][ny].fg_color);
             }
         }
 
         for t in &self.tokens {
-            buf[(t.x, t.y)].set_char(t.character).set_fg(t.fg_color);
+            buf[(t.x, t.y)]
+                .set_char(t.character)
+                .set_fg(t.fg_color)
+                .set_style(Modifier::BOLD);
         }
 
         buf[(area.x + self.cursor.x, area.y + self.cursor.y)]
             .set_char(self.cursor.character)
-            .set_fg(self.cursor.fg_color);
+            .set_fg(self.cursor.fg_color)
+            .set_style(Modifier::BOLD);
 
         let title = Line::from(match self.state {
             Drawing(_) => "DRAWING",
@@ -250,8 +288,8 @@ impl Widget for &App {
         });
 
         let current_color = Line::from(format!(
-            "COLOR: {} | {}",
-            PALETTE[self.color_i],
+            "COLOR: {:?} | {}",
+            self.brush,
             self.token_at()
                 .map(|i| self.tokens[i].to_string())
                 .unwrap_or_default()
@@ -282,8 +320,11 @@ fn main() -> io::Result<()> {
         },
         cells: Vec::new(),
         tokens: Vec::new(),
-        color_i: 0,
+        bg_color_i: 0,
+        fg_color_i: 0,
+        char_i: 0,
         state: Normal,
+        brush: Brush::BgColor(Color::White),
     };
     ratatui::run(|terminal| app.run(terminal))
 }

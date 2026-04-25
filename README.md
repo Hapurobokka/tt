@@ -4,51 +4,11 @@ Terminal TTRPG map tool. Roguelike aesthetic, local-only, built with Ratatui.
 
 ---
 
-## Fase 1 — Skeleton + Grid + Cursor
+## Completado
 
-El objetivo de esta fase es tener una app que corre, muestra un grid, y responde al teclado.
-Nada de pintar todavía. Solo moverse.
-
-### Checklist
-
-- [x] El terminal se inicializa correctamente (raw mode, pantalla alternativa)
-- [x] El terminal se restaura al salir, incluso si hay un panic
-- [x] Hay un loop principal: renderizar → leer input → repetir
-- [x] Se renderiza un grid de tamaño fijo (ej. 40×20) hecho de celdas vacías (`.`)
-- [x] Hay un cursor visible sobre el grid (ej. la celda del cursor se resalta o usa `@`)
-- [x] El cursor se mueve con las flechas del teclado
-- [x] El cursor se mueve con `h j k l` (estilo vim)
-- [x] El cursor no puede salirse de los límites del grid
-- [x] Presionar `q` cierra la app limpiamente
-
-### Criterio de éxito
-
-Puedo correr `cargo run`, ver un grid en la terminal, moverme por él, y salir con `q`.
-El terminal queda en el mismo estado que antes de correr el programa.
-
----
-
-## Fase 2 — Pintar celdas + Paleta de colores
-
-El objetivo es poder colorear celdas del grid con color de fondo.
-El cursor sigue siendo `@`. Las celdas pintadas muestran su color. Las vacías siguen siendo `.`.
-
-### Checklist
-
-- [x] Existe un struct `Cell` con al menos un campo `bg_color: Color`
-- [x] El `App` tiene un grid 2D (`Vec<Vec<Cell>>`) que representa el estado del mapa
-- [x] El grid se inicializa del tamaño del área dibujable al arrancar
-- [x] Las celdas se renderizan con su `bg_color` (las vacías sin color, las pintadas con su color)
-- [x] Hay una paleta de colores predefinida (mínimo 8 colores)
-- [x] El color actual se puede cambiar con las teclas `1`–`8` (o Tab para ciclar)
-- [x] Presionar `Space` o `Enter` pinta la celda bajo el cursor con el color actual
-- [x] Presionar `x` limpia la celda bajo el cursor (vuelve a vacía)
-- [x] El color actualmente seleccionado se muestra en algún lugar de la UI (título, borde, o status bar)
-
-### Criterio de éxito
-
-Puedo moverme por el grid, seleccionar colores con número, pintar celdas, borrarlas,
-y ver los colores reflejados en pantalla en tiempo real.
+- **Fase 1** — Skeleton: terminal init/restore, game loop, grid, cursor con `hjkl`/flechas, salir con `q`
+- **Fase 2** — Pintar: struct `Cell`, grid 2D, paleta de 8 colores (Tab/BackTab), modo Drawing y Deleting, color en status bar
+- **Fase 3** — Tokens: struct `Token` con Display, colocar (`t`), mover (`m`), eliminar (`d`), tokens múltiples por celda permitidos (resolución pendiente para fase futura)
 
 ---
 
@@ -58,27 +18,76 @@ y ver los colores reflejados en pantalla en tiempo real.
   `Escape` cancela y descarta los cambios. Implica estado "preview" o snapshot al entrar al modo.
 - **Undo stack**: cada acción confirmada empuja un `Action` (enum con variantes por tipo de cambio)
   a un `Vec`. `u` hace pop y revierte. Se diseña junto con el modelo commit para que sean coherentes.
+- **Tokens apilados**: múltiples tokens pueden coexistir en una celda. Pendiente: UI para elegir cuál mover cuando hay más de uno.
 
 ---
 
-## Fase 3 — Tokens
+## Fase 4 — Save/Load + Layout + Comandos
 
-Los tokens son entidades que viven *sobre* el grid. Tienen posición, un carácter visual,
-y un color de foreground. El cursor sigue existiendo independientemente de los tokens.
+### Layout objetivo
+
+```
+┌───────────────────────┬─────────────┐
+│                       │ [ Paleta ]  │
+│     MAPA (grid)       │ ■ ■ ■ ■     │
+│                       │             │
+│                       │ [ Tokens ]  │
+│                       │ 't' (3,4)   │
+│                       │ '@' (7,2)   │
+├───────────────────────┴─────────────┤
+│ EXPLORING | COLOR: White            │
+└─────────────────────────────────────┘
+```
+
+En modo comando, la barra inferior se convierte en input:
+
+```
+│ :w mapa.json_                       │
+```
+
+### Refactor de arquitectura (prerequisito)
+
+Antes del layout, el código se reorganiza:
+
+- [x] `Cell` pasa a tener tres campos: `bg_color`, `fg_color`, `terrain: char`
+- [ ] El estado se divide en `MapState` (cells, tokens) y `UiState` (state, color_i, message)
+- [ ] El render se divide en funciones puras: `render_map`, `render_sidebar`, `render_statusbar`, `render_commandline`
+- [ ] `impl Widget for &App` solo coordina el layout y llama a esas funciones
 
 ### Checklist
 
-- [x] Existe un struct `Token` con campos: `x: u16`, `y: u16`, `character: char`, `fg_color: Color`
-- [x] El `App` tiene un `Vec<Token>` para almacenar todos los tokens
-- [x] Presionar `t` coloca un nuevo token en la posición del cursor (carácter y color por defecto)
-- [x] Los tokens se renderizan encima del grid (su carácter reemplaza visualmente lo que haya en esa celda)
-- [x] Si el cursor está sobre una celda con un token y se presiona `Enter`, ese token queda **seleccionado**
-- [x] Con un token seleccionado, `hjkl` y las flechas mueven el token (el cursor va con él)
-- [x] Presionar `Enter` o `Escape` suelta el token seleccionado (vuelve a modo navigate)
-- [x] Presionar `d` cuando el cursor está sobre un token lo elimina
-- [ ] No pueden existir dos tokens en la misma celda (al mover o colocar, verificar colisión)
+**Terreno**
+
+- [x] Existe una paleta de caracteres de terreno (ej. `.` suelo, `#` pared, `~` agua, `%` árbol...)
+- [x] El modo Drawing pinta `bg_color` de la celda (color de zona)
+- [x] Existe un modo Terrain que pinta el carácter y `fg_color` de la celda
+- [x] Ambas paletas (color y terreno) son seleccionables independientemente
+
+**Layout**
+
+- [ ] El área se divide en: mapa (izquierda), panel lateral (derecha), barra inferior
+- [ ] El panel lateral muestra la paleta de colores con el color actual resaltado
+- [ ] El panel lateral muestra la lista de tokens activos (carácter + posición)
+- [ ] La barra inferior muestra el estado actual y el color seleccionado en modo normal
+
+**Comandos**
+
+- [ ] Existe `State::Command(String)` para almacenar el input del usuario
+- [ ] Presionar `:` entra en modo comando (la barra inferior se convierte en input)
+- [ ] Los caracteres escritos se acumulan en el `String` del estado
+- [ ] `Backspace` borra el último carácter del comando
+- [ ] `Esc` cancela el comando y vuelve a `Normal`
+- [ ] `Enter` ejecuta el comando
+
+**Save/Load**
+
+- [ ] `Cell` y `Token` implementan `Serialize` y `Deserialize`
+- [ ] `MapState` también es serializable (es lo único que se guarda)
+- [ ] `:w <nombre>` guarda el mapa actual en `<nombre>.json`
+- [ ] `:e <nombre>` carga un mapa desde `<nombre>.json` y reemplaza el estado actual
+- [ ] Si el archivo no existe o es inválido, se muestra un mensaje de error en la barra inferior
 
 ### Criterio de éxito
 
-Puedo colocar tokens en el mapa, seleccionarlos, moverlos por el grid,
-y eliminarlos. Los tokens son visualmente distintos del cursor y del grid.
+Puedo dibujar un mapa con colores de zona y caracteres de terreno, colocar tokens,
+guardar con `:w sesion`, cerrar, volver a abrir, cargar con `:e sesion`, y ver exactamente el mismo estado.
