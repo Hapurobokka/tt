@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::io;
 
@@ -26,7 +27,7 @@ const PALETTE: [Color; 8] = [
 
 const TERRAIN: [char; 8] = ['.', '#', '|', '"', '-', '+', '<', '>'];
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Cell {
     bg_color: Color,
     fg_color: Color,
@@ -69,13 +70,14 @@ enum State {
     Deleting,
     Moving(usize),
 }
-use State::*;
+use State::{Deleting, Drawing, Moving, Normal};
 
 #[derive(Debug)]
 pub struct App {
     exit: bool,
     cursor: Cursor,
     cells: Vec<Vec<Cell>>,
+    overlay: HashMap<(usize, usize), Cell>,
     bg_color_i: usize,
     fg_color_i: usize,
     char_i: usize,
@@ -85,6 +87,11 @@ pub struct App {
 }
 
 impl App {
+    /// # Errors
+    ///
+    /// It will return an error if it fails to read the terminal's size
+    /// or if it cant draw itself in the buffer
+    /// or if can't read events from crossterm
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         let s = terminal.size()?;
         for _ in 1..s.width - 1 {
@@ -126,15 +133,37 @@ impl App {
     }
 
     fn paint(&mut self, brush: Brush) {
+        let nx = self.cursor.x as usize - 1;
+        let ny = self.cursor.y as usize - 1;
+        let curr_cell = self
+            .overlay
+            .get(&(nx, ny))
+            .cloned()
+            .unwrap_or_else(|| self.cells[nx][ny].clone());
         match brush {
             Brush::BgColor(c) => {
-                self.cells[self.cursor.x as usize - 1][self.cursor.y as usize - 1].bg_color = c
+                let cell = Cell {
+                    bg_color: c,
+                    fg_color: curr_cell.fg_color,
+                    character: curr_cell.character,
+                };
+                self.overlay.insert((nx, ny), cell);
             }
             Brush::Char(ch) => {
-                self.cells[self.cursor.x as usize - 1][self.cursor.y as usize - 1].character = ch
+                let cell = Cell {
+                    bg_color: curr_cell.bg_color,
+                    fg_color: curr_cell.fg_color,
+                    character: ch,
+                };
+                self.overlay.insert((nx, ny), cell);
             }
             Brush::FgColor(c) => {
-                self.cells[self.cursor.x as usize - 1][self.cursor.y as usize - 1].fg_color = c
+                let cell = Cell {
+                    bg_color: curr_cell.bg_color,
+                    fg_color: c,
+                    character: curr_cell.character,
+                };
+                self.overlay.insert((nx, ny), cell);
             }
         }
     }
@@ -154,13 +183,13 @@ impl App {
     }
 
     fn move_cursor(&mut self, dx: i16, dy: i16, size: Size) {
-        let new_x = self.cursor.x as i16 + dx;
-        let new_y = self.cursor.y as i16 + dy;
-        if new_x >= 1 && new_x <= size.width as i16 - 2 {
-            self.cursor.x = new_x as u16;
+        let new_x = self.cursor.x.cast_signed() + dx;
+        let new_y = self.cursor.y.cast_signed() + dy;
+        if new_x >= 1 && new_x <= size.width.cast_signed() - 2 {
+            self.cursor.x = new_x.cast_unsigned();
         }
-        if new_y >= 1 && new_y <= size.height as i16 - 2 {
-            self.cursor.y = new_y as u16;
+        if new_y >= 1 && new_y <= size.height.cast_signed() - 2 {
+            self.cursor.y = new_y.cast_unsigned();
         }
         if let Moving(i) = self.state {
             self.tokens[i].x = self.cursor.x;
@@ -168,10 +197,17 @@ impl App {
         }
     }
 
-    fn sync_brush(&mut self) {
+    const fn sync_brush(&mut self) {
         if let Drawing(_) = self.state {
-            self.state = Drawing(self.brush)
+            self.state = Drawing(self.brush);
         }
+    }
+
+    fn commit_overlay(&mut self) {
+        for ((x, y), v) in &self.overlay {
+            self.cells[*x][*y] = v.clone();
+        }
+        self.overlay.clear();
     }
 
     fn handle_key_press(&mut self, key_event: KeyEvent, size: Size) {
@@ -181,6 +217,10 @@ impl App {
             KeyCode::Right | KeyCode::Char('l') => self.move_cursor(1, 0, size),
             KeyCode::Up | KeyCode::Char('k') => self.move_cursor(0, -1, size),
             KeyCode::Down | KeyCode::Char('j') => self.move_cursor(0, 1, size),
+            KeyCode::Char('y') => self.move_cursor(-1, -1, size),
+            KeyCode::Char('u') => self.move_cursor(1, -1, size),
+            KeyCode::Char('b') => self.move_cursor(-1, 1, size),
+            KeyCode::Char('n') => self.move_cursor(1, 1, size),
             KeyCode::Tab => {
                 match self.brush {
                     Brush::BgColor(_) => self.brush = Brush::FgColor(PALETTE[self.fg_color_i]),
@@ -191,13 +231,16 @@ impl App {
                 self.sync_brush();
             }
             KeyCode::Char(' ') => match self.state {
-                Drawing(_) => self.state = Normal,
+                Drawing(_) => {
+                    self.commit_overlay();
+                    self.state = Normal;
+                }
                 Normal | Deleting => self.state = Drawing(self.brush),
-                _ => {}
+                Moving(_) => {}
             },
             KeyCode::Char('x') => {
                 if self.state == Deleting {
-                    self.state = Normal
+                    self.state = Normal;
                 } else {
                     self.state = Deleting;
                 }
@@ -249,7 +292,10 @@ impl App {
                 };
                 self.sync_brush();
             }
-            KeyCode::Esc => self.state = Normal,
+            KeyCode::Esc => {
+                self.overlay.clear();
+                self.state = Normal;
+            }
             _ => {}
         }
     }
@@ -261,10 +307,17 @@ impl Widget for &App {
             for y in 1..area.height - 1 {
                 let (dx, dy) = (area.x + x, area.y + y);
                 let (nx, ny) = (x as usize - 1, y as usize - 1);
-                buf[(dx, dy)]
-                    .set_char(self.cells[nx][ny].character)
-                    .set_bg(self.cells[nx][ny].bg_color)
-                    .set_fg(self.cells[nx][ny].fg_color);
+                if let Some(c) = self.overlay.get(&(nx, ny)) {
+                    buf[(dx, dy)]
+                        .set_char(c.character)
+                        .set_bg(c.bg_color)
+                        .set_fg(c.fg_color);
+                } else {
+                    buf[(dx, dy)]
+                        .set_char(self.cells[nx][ny].character)
+                        .set_bg(self.cells[nx][ny].bg_color)
+                        .set_fg(self.cells[nx][ny].fg_color);
+                }
             }
         }
 
@@ -319,6 +372,7 @@ fn main() -> io::Result<()> {
             fg_color: Color::Yellow,
         },
         cells: Vec::new(),
+        overlay: HashMap::new(),
         tokens: Vec::new(),
         bg_color_i: 0,
         fg_color_i: 0,
