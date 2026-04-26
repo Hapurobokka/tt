@@ -65,13 +65,20 @@ enum Brush {
 }
 
 #[derive(Debug, PartialEq)]
+enum Mode {
+    Drawing,
+    Rectangle { anchor: (u16, u16) },
+    DeletingTerrain,
+    PlacingToken,
+    MovingToken(usize),
+}
+
+#[derive(Debug, PartialEq)]
 enum State {
     Normal,
-    Drawing(Brush),
-    Deleting,
-    Moving(usize),
+    Active(Mode),
 }
-use State::{Deleting, Drawing, Moving, Normal};
+use State::{Active, Normal};
 
 #[derive(Debug)]
 pub struct App {
@@ -91,6 +98,11 @@ impl Cursor {
     const fn reset_cursor(&mut self) {
         self.x = self.prev_position.0;
         self.y = self.prev_position.1;
+        self.character = '@';
+    }
+
+    const fn save_position(&mut self) {
+        self.prev_position = (self.x, self.y);
     }
 }
 
@@ -118,8 +130,8 @@ impl App {
             terminal.draw(|frame| self.draw(frame))?;
             self.handle_events(s)?;
             match self.state {
-                Drawing(b) => self.paint(b),
-                Deleting => self.delete(),
+                Active(Mode::Drawing) => self.paint(self.brush),
+                Active(Mode::DeletingTerrain) => self.delete(),
                 _ => {}
             }
         }
@@ -138,6 +150,14 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    fn delete(&mut self) {
+        match self.brush {
+            Brush::BgColor(_) => self.paint(Brush::BgColor(Color::Reset)),
+            Brush::FgColor(_) => self.paint(Brush::BgColor(Color::White)),
+            Brush::Char(_) => self.paint(Brush::Char(' ')),
+        }
     }
 
     fn paint(&mut self, brush: Brush) {
@@ -176,14 +196,6 @@ impl App {
         }
     }
 
-    fn delete(&mut self) {
-        match self.brush {
-            Brush::BgColor(_) => self.paint(Brush::BgColor(Color::Reset)),
-            Brush::FgColor(_) => self.paint(Brush::BgColor(Color::White)),
-            Brush::Char(_) => self.paint(Brush::Char(' ')),
-        }
-    }
-
     fn token_at(&self) -> Option<usize> {
         self.tokens
             .iter()
@@ -199,23 +211,61 @@ impl App {
         if new_y >= 1 && new_y <= size.height.cast_signed() - 2 {
             self.cursor.y = new_y.cast_unsigned();
         }
-        if let Moving(i) = self.state {
+        if let Active(Mode::MovingToken(i)) = self.state {
             self.tokens[i].x = self.cursor.x;
             self.tokens[i].y = self.cursor.y;
         }
     }
 
-    const fn sync_brush(&mut self) {
-        if let Drawing(_) = self.state {
-            self.state = Drawing(self.brush);
-        }
-    }
-
-    fn commit_overlay(&mut self) {
+    fn merge_overlay(&mut self) {
         for ((x, y), v) in &self.overlay {
             self.cells[*x][*y] = v.clone();
         }
+    }
+
+    fn commit(&mut self) {
+        if let State::Active(mode) = &self.state {
+            match mode {
+                Mode::Drawing | Mode::DeletingTerrain => self.merge_overlay(),
+                Mode::MovingToken(_) => {
+                    self.cursor.character = '@';
+                }
+                _ => todo!(),
+            }
+        }
         self.overlay.clear();
+        self.state = Normal;
+    }
+
+    fn revert(&mut self) {
+        if let Active(Mode::MovingToken(i)) = self.state {
+            self.tokens[i].x = self.cursor.prev_position.0;
+            self.tokens[i].y = self.cursor.prev_position.1;
+            self.cursor.character = '@';
+        }
+        if self.state != Normal {
+            self.overlay.clear();
+            self.cursor.reset_cursor();
+            self.state = Normal;
+        }
+    }
+
+    const fn change_brush(&mut self, choice: char) {
+        let i = (choice as usize) - ('1' as usize);
+        self.brush = match self.brush {
+            Brush::Char(_) => {
+                self.char_i = i;
+                Brush::Char(TERRAIN[self.char_i])
+            }
+            Brush::BgColor(_) => {
+                self.bg_color_i = i;
+                Brush::BgColor(PALETTE[self.bg_color_i])
+            }
+            Brush::FgColor(_) => {
+                self.fg_color_i = i;
+                Brush::FgColor(PALETTE[self.fg_color_i])
+            }
+        };
     }
 
     fn handle_key_press(&mut self, key_event: KeyEvent, size: Size) {
@@ -229,31 +279,39 @@ impl App {
             KeyCode::Char('u') => self.move_cursor(1, -1, size),
             KeyCode::Char('b') => self.move_cursor(-1, 1, size),
             KeyCode::Char('n') => self.move_cursor(1, 1, size),
-            KeyCode::Tab => {
-                match self.brush {
-                    Brush::BgColor(_) => self.brush = Brush::FgColor(PALETTE[self.fg_color_i]),
-                    Brush::FgColor(_) => self.brush = Brush::Char(TERRAIN[self.char_i]),
-                    Brush::Char(_) => self.brush = Brush::BgColor(PALETTE[self.bg_color_i]),
-                }
-
-                self.sync_brush();
-            }
-            KeyCode::Char(' ') => match self.state {
-                Drawing(_) => {
-                    self.commit_overlay();
-                    self.state = Normal;
-                }
-                Normal | Deleting => {
-                    self.cursor.prev_position = (self.cursor.x, self.cursor.y);
-                    self.state = Drawing(self.brush);
-                }
-                Moving(_) => {}
+            KeyCode::Tab => match self.brush {
+                Brush::BgColor(_) => self.brush = Brush::FgColor(PALETTE[self.fg_color_i]),
+                Brush::FgColor(_) => self.brush = Brush::Char(TERRAIN[self.char_i]),
+                Brush::Char(_) => self.brush = Brush::BgColor(PALETTE[self.bg_color_i]),
             },
-            KeyCode::Char('x') => {
-                if self.state == Deleting {
-                    self.state = Normal;
+            KeyCode::Char(c @ '1'..='8') => self.change_brush(c),
+            KeyCode::Esc => self.revert(),
+            // The keys down here will do "commits", aka, here is where we put the keys
+            // that actually do something.
+            KeyCode::Char(' ') => {
+                self.commit();
+            }
+            KeyCode::Char('d') => {
+                if self.state == Active(Mode::Drawing) {
+                    self.commit();
                 } else {
-                    self.state = Deleting;
+                    self.cursor.save_position();
+                    self.state = Active(Mode::Drawing);
+                }
+            }
+            KeyCode::Char('x') => {
+                if self.state == Active(Mode::DeletingTerrain) {
+                    self.commit();
+                } else {
+                    self.cursor.save_position();
+                    self.state = Active(Mode::DeletingTerrain);
+                }
+            }
+            KeyCode::Char('X') => {
+                if let Some(i) = self.token_at()
+                    && self.state == Normal
+                {
+                    self.tokens.remove(i);
                 }
             }
             KeyCode::Char('t') => {
@@ -266,53 +324,16 @@ impl App {
                     });
                 }
             }
-            KeyCode::Char('d') => {
+            KeyCode::Char('m') => {
                 if let Some(i) = self.token_at()
                     && self.state == Normal
                 {
-                    self.tokens.remove(i);
+                    self.cursor.save_position();
+                    self.state = Active(Mode::MovingToken(i));
+                    self.cursor.character = self.tokens[i].character;
+                } else if let Active(Mode::MovingToken(_)) = self.state {
+                    self.commit();
                 }
-            }
-            KeyCode::Char('m') => match self.state {
-                Moving(_) => {
-                    self.state = Normal;
-                    self.cursor.character = '@';
-                }
-                _ => {
-                    if let Some(i) = self.token_at() {
-                        self.cursor.prev_position = (self.cursor.x, self.cursor.y);
-                        self.state = Moving(i);
-                        self.cursor.character = self.tokens[i].character;
-                    }
-                }
-            },
-            KeyCode::Char(c @ '1'..='8') => {
-                let i = (c as usize) - ('1' as usize);
-                self.brush = match self.brush {
-                    Brush::Char(_) => {
-                        self.char_i = i;
-                        Brush::Char(TERRAIN[self.char_i])
-                    }
-                    Brush::BgColor(_) => {
-                        self.bg_color_i = i;
-                        Brush::BgColor(PALETTE[self.bg_color_i])
-                    }
-                    Brush::FgColor(_) => {
-                        self.fg_color_i = i;
-                        Brush::FgColor(PALETTE[self.fg_color_i])
-                    }
-                };
-                self.sync_brush();
-            }
-            KeyCode::Esc => {
-                if let Moving(i) = self.state {
-                    self.tokens[i].x = self.cursor.prev_position.0;
-                    self.tokens[i].y = self.cursor.prev_position.1;
-                    self.cursor.character = '@';
-                }
-                self.overlay.clear();
-                self.cursor.reset_cursor();
-                self.state = Normal;
             }
             _ => {}
         }
@@ -365,10 +386,11 @@ impl Widget for &App {
             .set_style(Modifier::BOLD);
 
         let title = Line::from(match self.state {
-            Drawing(_) => "DRAWING",
-            Deleting => "DELETING",
+            Active(Mode::Drawing) => "DRAWING",
+            Active(Mode::DeletingTerrain) => "DELETING",
             Normal => "EXPLORING",
-            Moving(_) => "MOVING",
+            Active(Mode::MovingToken(_)) => "MOVING",
+            Active(_) => todo!(),
         });
 
         let current_color = Line::from(format!(
@@ -383,10 +405,11 @@ impl Widget for &App {
             .title(title)
             .title_bottom(current_color)
             .border_style(match self.state {
-                Drawing(_) => Color::Magenta,
-                Deleting => Color::Red,
-                Moving(_) => Color::Yellow,
+                Active(Mode::Drawing) => Color::Magenta,
+                Active(Mode::DeletingTerrain) => Color::Red,
                 Normal => Color::White,
+                Active(Mode::MovingToken(_)) => Color::Yellow,
+                Active(_) => todo!(),
             })
             .border_set(border::THICK);
         block.render(area, buf);
