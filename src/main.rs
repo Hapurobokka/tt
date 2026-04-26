@@ -38,6 +38,7 @@ pub struct Cell {
 struct Cursor {
     x: u16,
     y: u16,
+    prev_position: (u16, u16),
     character: char,
     fg_color: Color,
 }
@@ -86,6 +87,13 @@ pub struct App {
     brush: Brush,
 }
 
+impl Cursor {
+    const fn reset_cursor(&mut self) {
+        self.x = self.prev_position.0;
+        self.y = self.prev_position.1;
+    }
+}
+
 impl App {
     /// # Errors
     ///
@@ -110,7 +118,7 @@ impl App {
             terminal.draw(|frame| self.draw(frame))?;
             self.handle_events(s)?;
             match self.state {
-                Drawing(c) => self.paint(c),
+                Drawing(b) => self.paint(b),
                 Deleting => self.delete(),
                 _ => {}
             }
@@ -235,7 +243,10 @@ impl App {
                     self.commit_overlay();
                     self.state = Normal;
                 }
-                Normal | Deleting => self.state = Drawing(self.brush),
+                Normal | Deleting => {
+                    self.cursor.prev_position = (self.cursor.x, self.cursor.y);
+                    self.state = Drawing(self.brush);
+                }
                 Moving(_) => {}
             },
             KeyCode::Char('x') => {
@@ -269,6 +280,7 @@ impl App {
                 }
                 _ => {
                     if let Some(i) = self.token_at() {
+                        self.cursor.prev_position = (self.cursor.x, self.cursor.y);
                         self.state = Moving(i);
                         self.cursor.character = self.tokens[i].character;
                     }
@@ -293,11 +305,27 @@ impl App {
                 self.sync_brush();
             }
             KeyCode::Esc => {
+                if let Moving(i) = self.state {
+                    self.tokens[i].x = self.cursor.prev_position.0;
+                    self.tokens[i].y = self.cursor.prev_position.1;
+                    self.cursor.character = '@';
+                }
                 self.overlay.clear();
+                self.cursor.reset_cursor();
                 self.state = Normal;
             }
             _ => {}
         }
+    }
+}
+
+macro_rules! key_hints {
+    ($(($key:expr, $desc:expr)),+) => {
+        Line::from(vec![
+            $(
+                format!("[{}]: {} ", $key, $desc).into(),
+            )+
+        ])
     }
 }
 
@@ -320,6 +348,9 @@ impl Widget for &App {
                 }
             }
         }
+
+        // TODO A way to implement key hints
+        // let x = key_hints!(("x", "Borrar"), ("d", "Borrar token"));
 
         for t in &self.tokens {
             buf[(t.x, t.y)]
@@ -368,6 +399,7 @@ fn main() -> io::Result<()> {
         cursor: Cursor {
             x: 1,
             y: 1,
+            prev_position: (1, 1),
             character: '@',
             fg_color: Color::Yellow,
         },
