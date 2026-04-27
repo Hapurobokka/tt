@@ -27,33 +27,41 @@ const PALETTE: [Color; 8] = [
 
 const TERRAIN: [char; 8] = ['.', '#', '|', '"', '-', '+', '<', '>'];
 
-#[derive(Debug, Default, Clone)]
+// It is probably okay to copy and clone this stuff
+// since it is not that big. Colors are just hexes (maybe)
+// and chars are only ints
+#[derive(Debug, Default, Clone, Copy)]
 pub struct Cell {
     bg_color: Color,
     fg_color: Color,
     character: char,
 }
 
-#[derive(Debug)]
-struct Cursor {
+// but it makes feel kinda dumb lol
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Position {
     x: u16,
     y: u16,
-    prev_position: (u16, u16),
+}
+
+#[derive(Debug)]
+struct Cursor {
+    pos: Position,
+    prev_position: Position,
     character: char,
     fg_color: Color,
 }
 
 #[derive(Debug)]
 struct Token {
-    x: u16,
-    y: u16,
+    pos: Position,
     character: char,
     fg_color: Color,
 }
 
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "'{}' ({}, {})", self.character, self.x, self.y)
+        write!(f, "'{}' ({}, {})", self.character, self.pos.x, self.pos.y)
     }
 }
 
@@ -67,7 +75,7 @@ enum Brush {
 #[derive(Debug, PartialEq)]
 enum Mode {
     Drawing,
-    Rectangle { anchor: (u16, u16) },
+    Rectangle { anchor: Position },
     DeletingTerrain,
     PlacingToken,
     MovingToken(usize),
@@ -96,13 +104,16 @@ pub struct App {
 
 impl Cursor {
     const fn reset_cursor(&mut self) {
-        self.x = self.prev_position.0;
-        self.y = self.prev_position.1;
+        self.pos.x = self.prev_position.x;
+        self.pos.y = self.prev_position.y;
         self.character = '@';
     }
 
     const fn save_position(&mut self) {
-        self.prev_position = (self.x, self.y);
+        self.prev_position = Position {
+            x: self.pos.x,
+            y: self.pos.y,
+        };
     }
 }
 
@@ -130,7 +141,7 @@ impl App {
             terminal.draw(|frame| self.draw(frame))?;
             self.handle_events(s)?;
             match self.state {
-                Active(Mode::Drawing) => self.paint(self.brush),
+                Active(Mode::Drawing) => self.paint(self.brush, self.cursor.pos),
                 Active(Mode::DeletingTerrain) => self.delete(),
                 _ => {}
             }
@@ -154,20 +165,24 @@ impl App {
 
     fn delete(&mut self) {
         match self.brush {
-            Brush::BgColor(_) => self.paint(Brush::BgColor(Color::Reset)),
-            Brush::FgColor(_) => self.paint(Brush::BgColor(Color::White)),
-            Brush::Char(_) => self.paint(Brush::Char(' ')),
+            Brush::BgColor(_) => {
+                self.paint(Brush::BgColor(Color::Reset), self.cursor.pos);
+            }
+            Brush::FgColor(_) => {
+                self.paint(Brush::BgColor(Color::White), self.cursor.pos);
+            }
+            Brush::Char(_) => self.paint(Brush::Char(' '), self.cursor.pos),
         }
     }
 
-    fn paint(&mut self, brush: Brush) {
-        let nx = self.cursor.x as usize - 1;
-        let ny = self.cursor.y as usize - 1;
+    fn paint(&mut self, brush: Brush, pos: Position) {
+        let nx = pos.x as usize - 1;
+        let ny = pos.y as usize - 1;
         let curr_cell = self
             .overlay
             .get(&(nx, ny))
-            .cloned()
-            .unwrap_or_else(|| self.cells[nx][ny].clone());
+            .copied()
+            .unwrap_or_else(|| self.cells[nx][ny]);
         match brush {
             Brush::BgColor(c) => {
                 let cell = Cell {
@@ -196,41 +211,77 @@ impl App {
         }
     }
 
+    fn paint_rec(&mut self) {
+        let add_to = |a: u16, b: u16| a + b;
+        let sub_to = |a: u16, b: u16| a - b;
+
+        // TODO This doesn't seem too good
+        self.overlay.clear();
+        let second = (self.cursor.pos.x, self.cursor.pos.y);
+
+        // TODO Neither this if let. At this point we are certain that we are
+        // in Rectangle mode
+        if let Active(Mode::Rectangle { anchor }) = self.state {
+            let dx = second.0.cast_signed() - anchor.x.cast_signed();
+            let dy = second.1.cast_signed() - anchor.y.cast_signed();
+
+            let op_x = if dx < 0 { sub_to } else { add_to };
+            let op_y = if dy < 0 { sub_to } else { add_to };
+
+            for i in 0..=dx.abs().cast_unsigned() {
+                for j in 0..=dy.abs().cast_unsigned() {
+                    self.paint(
+                        self.brush,
+                        Position {
+                            x: op_x(anchor.x, i),
+                            y: op_y(anchor.y, j),
+                        },
+                    );
+                }
+            }
+        }
+    }
+
     fn token_at(&self) -> Option<usize> {
         self.tokens
             .iter()
-            .position(|t| t.x == self.cursor.x && t.y == self.cursor.y)
+            .position(|t| t.pos.x == self.cursor.pos.x && t.pos.y == self.cursor.pos.y)
     }
 
     fn move_cursor(&mut self, dx: i16, dy: i16, size: Size) {
-        let new_x = self.cursor.x.cast_signed() + dx;
-        let new_y = self.cursor.y.cast_signed() + dy;
+        let new_x = self.cursor.pos.x.cast_signed() + dx;
+        let new_y = self.cursor.pos.y.cast_signed() + dy;
         if new_x >= 1 && new_x <= size.width.cast_signed() - 2 {
-            self.cursor.x = new_x.cast_unsigned();
+            self.cursor.pos.x = new_x.cast_unsigned();
         }
         if new_y >= 1 && new_y <= size.height.cast_signed() - 2 {
-            self.cursor.y = new_y.cast_unsigned();
+            self.cursor.pos.y = new_y.cast_unsigned();
         }
         if let Active(Mode::MovingToken(i)) = self.state {
-            self.tokens[i].x = self.cursor.x;
-            self.tokens[i].y = self.cursor.y;
+            self.tokens[i].pos.x = self.cursor.pos.x;
+            self.tokens[i].pos.y = self.cursor.pos.y;
+        }
+        if let Active(Mode::Rectangle { anchor: _ }) = self.state {
+            self.paint_rec();
         }
     }
 
     fn merge_overlay(&mut self) {
         for ((x, y), v) in &self.overlay {
-            self.cells[*x][*y] = v.clone();
+            self.cells[*x][*y] = *v;
         }
     }
 
     fn commit(&mut self) {
         if let State::Active(mode) = &self.state {
             match mode {
-                Mode::Drawing | Mode::DeletingTerrain => self.merge_overlay(),
+                Mode::Drawing | Mode::DeletingTerrain | Mode::Rectangle { anchor: _ } => {
+                    self.merge_overlay();
+                }
                 Mode::MovingToken(_) => {
                     self.cursor.character = '@';
                 }
-                _ => todo!(),
+                Mode::PlacingToken => todo!(),
             }
         }
         self.overlay.clear();
@@ -239,8 +290,8 @@ impl App {
 
     fn revert(&mut self) {
         if let Active(Mode::MovingToken(i)) = self.state {
-            self.tokens[i].x = self.cursor.prev_position.0;
-            self.tokens[i].y = self.cursor.prev_position.1;
+            self.tokens[i].pos.x = self.cursor.prev_position.x;
+            self.tokens[i].pos.y = self.cursor.prev_position.y;
             self.cursor.character = '@';
         }
         if self.state != Normal {
@@ -291,12 +342,26 @@ impl App {
             KeyCode::Char(' ') => {
                 self.commit();
             }
+            // TODO
+            // It seems that we can go from d to D, and maybe we don't want to
+            // do that (or it should at least be smoother)
             KeyCode::Char('d') => {
                 if self.state == Active(Mode::Drawing) {
                     self.commit();
                 } else {
                     self.cursor.save_position();
                     self.state = Active(Mode::Drawing);
+                }
+            }
+            KeyCode::Char('D') => {
+                if let Active(Mode::Rectangle { anchor: _ }) = self.state {
+                    self.commit();
+                } else if self.state == Normal {
+                    self.cursor.save_position();
+                    self.state = Active(Mode::Rectangle {
+                        anchor: self.cursor.pos,
+                    });
+                    self.paint_rec();
                 }
             }
             KeyCode::Char('x') => {
@@ -317,8 +382,10 @@ impl App {
             KeyCode::Char('t') => {
                 if self.state == Normal {
                     self.tokens.push(Token {
-                        x: self.cursor.x,
-                        y: self.cursor.y,
+                        pos: Position {
+                            x: self.cursor.pos.x,
+                            y: self.cursor.pos.y,
+                        },
                         character: 't',
                         fg_color: Color::Red,
                     });
@@ -340,15 +407,15 @@ impl App {
     }
 }
 
-macro_rules! key_hints {
-    ($(($key:expr, $desc:expr)),+) => {
-        Line::from(vec![
-            $(
-                format!("[{}]: {} ", $key, $desc).into(),
-            )+
-        ])
-    }
-}
+// macro_rules! key_hints {
+//     ($(($key:expr, $desc:expr)),+) => {
+//         Line::from(vec![
+//             $(
+//                 format!("[{}]: {} ", $key, $desc).into(),
+//             )+
+//         ])
+//     }
+// }
 
 impl Widget for &App {
     fn render(self, area: Rect, buf: &mut Buffer) {
@@ -374,23 +441,23 @@ impl Widget for &App {
         // let x = key_hints!(("x", "Borrar"), ("d", "Borrar token"));
 
         for t in &self.tokens {
-            buf[(t.x, t.y)]
+            buf[(t.pos.x, t.pos.y)]
                 .set_char(t.character)
                 .set_fg(t.fg_color)
                 .set_style(Modifier::BOLD);
         }
 
-        buf[(area.x + self.cursor.x, area.y + self.cursor.y)]
+        buf[(area.x + self.cursor.pos.x, area.y + self.cursor.pos.y)]
             .set_char(self.cursor.character)
             .set_fg(self.cursor.fg_color)
             .set_style(Modifier::BOLD);
 
         let title = Line::from(match self.state {
-            Active(Mode::Drawing) => "DRAWING",
+            Active(Mode::Drawing | Mode::Rectangle { anchor: _ }) => "DRAWING",
             Active(Mode::DeletingTerrain) => "DELETING",
             Normal => "EXPLORING",
             Active(Mode::MovingToken(_)) => "MOVING",
-            Active(_) => todo!(),
+            Active(Mode::PlacingToken) => todo!(),
         });
 
         let current_color = Line::from(format!(
@@ -405,11 +472,11 @@ impl Widget for &App {
             .title(title)
             .title_bottom(current_color)
             .border_style(match self.state {
-                Active(Mode::Drawing) => Color::Magenta,
+                Active(Mode::Drawing | Mode::Rectangle { anchor: _ }) => Color::Magenta,
                 Active(Mode::DeletingTerrain) => Color::Red,
                 Normal => Color::White,
                 Active(Mode::MovingToken(_)) => Color::Yellow,
-                Active(_) => todo!(),
+                Active(Mode::PlacingToken) => todo!(),
             })
             .border_set(border::THICK);
         block.render(area, buf);
@@ -420,9 +487,8 @@ fn main() -> io::Result<()> {
     let mut app = App {
         exit: false,
         cursor: Cursor {
-            x: 1,
-            y: 1,
-            prev_position: (1, 1),
+            pos: Position { x: 1, y: 1 },
+            prev_position: Position { x: 1, y: 1 },
             character: '@',
             fg_color: Color::Yellow,
         },
