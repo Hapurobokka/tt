@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io;
 
+use crossterm::event::KeyModifiers;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::style::Modifier;
 use ratatui::{
@@ -16,7 +17,7 @@ use ratatui::{
 
 const PALETTE: [Color; 8] = [
     Color::White,
-    Color::Black,
+    Color::Cyan,
     Color::Red,
     Color::Blue,
     Color::Green,
@@ -77,6 +78,7 @@ enum Mode {
     Drawing,
     Rectangle { anchor: Position },
     DeletingTerrain,
+    DeletingRect { anchor: Position },
     PlacingToken,
     MovingToken(usize),
 }
@@ -130,7 +132,7 @@ impl App {
             for _ in 1..s.height - 1 {
                 cs.push(Cell {
                     fg_color: Color::White,
-                    bg_color: Color::Reset,
+                    bg_color: Color::Black,
                     character: ' ',
                 });
             }
@@ -143,6 +145,16 @@ impl App {
             match self.state {
                 Active(Mode::Drawing) => self.paint(self.brush, self.cursor.pos),
                 Active(Mode::DeletingTerrain) => self.delete(),
+                Active(Mode::MovingToken(i)) => {
+                    self.tokens[i].pos.x = self.cursor.pos.x;
+                    self.tokens[i].pos.y = self.cursor.pos.y;
+                }
+                Active(Mode::Rectangle { anchor: a }) => {
+                    self.paint_rec(self.brush, a);
+                }
+                Active(Mode::DeletingRect { anchor: a }) => {
+                    self.delete_rect(a);
+                }
                 _ => {}
             }
         }
@@ -166,13 +178,22 @@ impl App {
     fn delete(&mut self) {
         match self.brush {
             Brush::BgColor(_) => {
-                self.paint(Brush::BgColor(Color::Reset), self.cursor.pos);
+                self.paint(Brush::BgColor(Color::Black), self.cursor.pos);
             }
             Brush::FgColor(_) => {
-                self.paint(Brush::BgColor(Color::White), self.cursor.pos);
+                self.paint(Brush::FgColor(Color::White), self.cursor.pos);
             }
             Brush::Char(_) => self.paint(Brush::Char(' '), self.cursor.pos),
         }
+    }
+
+    fn delete_rect(&mut self, anchor: Position) {
+        let b = match self.brush {
+            Brush::BgColor(_) => Brush::BgColor(Color::Black),
+            Brush::FgColor(_) => Brush::FgColor(Color::White),
+            Brush::Char(_) => Brush::Char(' '),
+        };
+        self.paint_rec(b, anchor);
     }
 
     fn paint(&mut self, brush: Brush, pos: Position) {
@@ -211,33 +232,29 @@ impl App {
         }
     }
 
-    fn paint_rec(&mut self) {
+    fn paint_rec(&mut self, brush: Brush, anchor: Position) {
         let add_to = |a: u16, b: u16| a + b;
         let sub_to = |a: u16, b: u16| a - b;
 
-        // TODO This doesn't seem too good
+        // TODO not sold on this yet
         self.overlay.clear();
         let second = (self.cursor.pos.x, self.cursor.pos.y);
 
-        // TODO Neither this if let. At this point we are certain that we are
-        // in Rectangle mode
-        if let Active(Mode::Rectangle { anchor }) = self.state {
-            let dx = second.0.cast_signed() - anchor.x.cast_signed();
-            let dy = second.1.cast_signed() - anchor.y.cast_signed();
+        let dx = second.0.cast_signed() - anchor.x.cast_signed();
+        let dy = second.1.cast_signed() - anchor.y.cast_signed();
 
-            let op_x = if dx < 0 { sub_to } else { add_to };
-            let op_y = if dy < 0 { sub_to } else { add_to };
+        let op_x = if dx < 0 { sub_to } else { add_to };
+        let op_y = if dy < 0 { sub_to } else { add_to };
 
-            for i in 0..=dx.abs().cast_unsigned() {
-                for j in 0..=dy.abs().cast_unsigned() {
-                    self.paint(
-                        self.brush,
-                        Position {
-                            x: op_x(anchor.x, i),
-                            y: op_y(anchor.y, j),
-                        },
-                    );
-                }
+        for i in 0..=dx.abs().cast_unsigned() {
+            for j in 0..=dy.abs().cast_unsigned() {
+                self.paint(
+                    brush,
+                    Position {
+                        x: op_x(anchor.x, i),
+                        y: op_y(anchor.y, j),
+                    },
+                );
             }
         }
     }
@@ -248,7 +265,7 @@ impl App {
             .position(|t| t.pos.x == self.cursor.pos.x && t.pos.y == self.cursor.pos.y)
     }
 
-    fn move_cursor(&mut self, dx: i16, dy: i16, size: Size) {
+    const fn move_cursor(&mut self, dx: i16, dy: i16, size: Size) {
         let new_x = self.cursor.pos.x.cast_signed() + dx;
         let new_y = self.cursor.pos.y.cast_signed() + dy;
         if new_x >= 1 && new_x <= size.width.cast_signed() - 2 {
@@ -256,13 +273,6 @@ impl App {
         }
         if new_y >= 1 && new_y <= size.height.cast_signed() - 2 {
             self.cursor.pos.y = new_y.cast_unsigned();
-        }
-        if let Active(Mode::MovingToken(i)) = self.state {
-            self.tokens[i].pos.x = self.cursor.pos.x;
-            self.tokens[i].pos.y = self.cursor.pos.y;
-        }
-        if let Active(Mode::Rectangle { anchor: _ }) = self.state {
-            self.paint_rec();
         }
     }
 
@@ -275,7 +285,10 @@ impl App {
     fn commit(&mut self) {
         if let State::Active(mode) = &self.state {
             match mode {
-                Mode::Drawing | Mode::DeletingTerrain | Mode::Rectangle { anchor: _ } => {
+                Mode::Drawing
+                | Mode::DeletingTerrain
+                | Mode::Rectangle { anchor: _ }
+                | Mode::DeletingRect { anchor: _ } => {
                     self.merge_overlay();
                 }
                 Mode::MovingToken(_) => {
@@ -348,7 +361,7 @@ impl App {
             KeyCode::Char('d') => {
                 if self.state == Active(Mode::Drawing) {
                     self.commit();
-                } else {
+                } else if self.state == Normal {
                     self.cursor.save_position();
                     self.state = Active(Mode::Drawing);
                 }
@@ -361,22 +374,31 @@ impl App {
                     self.state = Active(Mode::Rectangle {
                         anchor: self.cursor.pos,
                     });
-                    self.paint_rec();
+                }
+            }
+            KeyCode::Char('x') if key_event.modifiers == KeyModifiers::CONTROL => {
+                if let Some(i) = self.token_at()
+                    && self.state == Normal
+                {
+                    self.tokens.remove(i);
                 }
             }
             KeyCode::Char('x') => {
                 if self.state == Active(Mode::DeletingTerrain) {
                     self.commit();
-                } else {
+                } else if self.state == Normal {
                     self.cursor.save_position();
                     self.state = Active(Mode::DeletingTerrain);
                 }
             }
             KeyCode::Char('X') => {
-                if let Some(i) = self.token_at()
-                    && self.state == Normal
-                {
-                    self.tokens.remove(i);
+                if let Active(Mode::DeletingRect { anchor: _ }) = self.state {
+                    self.commit();
+                } else if self.state == Normal {
+                    self.cursor.save_position();
+                    self.state = Active(Mode::DeletingRect {
+                        anchor: self.cursor.pos,
+                    });
                 }
             }
             KeyCode::Char('t') => {
@@ -454,7 +476,7 @@ impl Widget for &App {
 
         let title = Line::from(match self.state {
             Active(Mode::Drawing | Mode::Rectangle { anchor: _ }) => "DRAWING",
-            Active(Mode::DeletingTerrain) => "DELETING",
+            Active(Mode::DeletingTerrain | Mode::DeletingRect { anchor: _ }) => "DELETING",
             Normal => "EXPLORING",
             Active(Mode::MovingToken(_)) => "MOVING",
             Active(Mode::PlacingToken) => todo!(),
@@ -473,7 +495,7 @@ impl Widget for &App {
             .title_bottom(current_color)
             .border_style(match self.state {
                 Active(Mode::Drawing | Mode::Rectangle { anchor: _ }) => Color::Magenta,
-                Active(Mode::DeletingTerrain) => Color::Red,
+                Active(Mode::DeletingTerrain | Mode::DeletingRect { anchor: _ }) => Color::Red,
                 Normal => Color::White,
                 Active(Mode::MovingToken(_)) => Color::Yellow,
                 Active(Mode::PlacingToken) => todo!(),
