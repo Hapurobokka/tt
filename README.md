@@ -8,17 +8,37 @@ Terminal TTRPG map tool. Roguelike aesthetic, local-only, built with Ratatui.
 
 - **Fase 1** — Skeleton: terminal init/restore, game loop, grid, cursor con `hjkl`/flechas, salir con `q`
 - **Fase 2** — Pintar: struct `Cell`, grid 2D, paleta de 8 colores (Tab/BackTab), modo Drawing y Deleting, color en status bar
-- **Fase 3** — Tokens: struct `Token` con Display, colocar (`t`), mover (`m`), eliminar (`d`), tokens múltiples por celda permitidos (resolución pendiente para fase futura)
+- **Fase 3** — Tokens: struct `Token` con Display, colocar (`t`), mover (`m`), eliminar (`Ctrl+X`), tokens múltiples por celda permitidos (resolución pendiente para fase futura)
+- **Fase 3.1** — Refinamiento de dibujado y arquitectura:
+  - `State::Active(Mode)` como contrato de ciclo de vida: misma tecla o `Space` para commit, `Esc` para cancelar
+  - Overlay (`HashMap<(usize,usize), Cell>`) para preview de cambios antes de confirmar
+  - Movimiento diagonal con `y/u/b/n` (convención nethack)
+  - Rectángulos: `D` para pintar, `X` para borrar — preview en vivo mientras se mueve el cursor
+  - `Position` struct; `paint` acepta posición explícita en vez de leer del cursor
+  - Keybinds: `d` dibujar, `D` rectángulo, `x` borrar terreno, `X` borrar rect, `Ctrl+X` eliminar token, `m` mover token
+  - Lints estrictos de Clippy (`pedantic`, `nursery`, `unsafe_code = deny`) en `Cargo.toml`
 
 ---
 
-## Notas de diseño (para fases futuras)
+## Fase 3.2 — Colocación de tokens
 
-- **Modelo commit**: las acciones no se aplican hasta confirmar con `Space`/`Enter`.
-  `Escape` cancela y descarta los cambios. Implica estado "preview" o snapshot al entrar al modo.
-- **Undo stack**: cada acción confirmada empuja un `Action` (enum con variantes por tipo de cambio)
-  a un `Vec`. `u` hace pop y revierte. Se diseña junto con el modelo commit para que sean coherentes.
-- **Tokens apilados**: múltiples tokens pueden coexistir en una celda. Pendiente: UI para elegir cuál mover cuando hay más de uno.
+### Flujo de `PlacingToken`
+
+1. `t` → entra en `Active(PlacingToken { character: None })`, cursor sigue siendo `@`
+2. Cualquier tecla imprimible → `PlacingToken { character: Some(c) }`, cursor cambia a `c` con el `fg_color` actual
+3. Mover el cursor a la posición deseada
+4. `t` o `Space` → coloca el token con `character: c` y `fg_color: PALETTE[fg_color_i]`
+5. `Esc` en cualquier momento cancela
+
+El color del token se hereda de `fg_color_i` en el momento del commit — el usuario lo selecciona antes de presionar `t`, igual que con el brush.
+
+### Checklist
+
+- [x] `Mode::PlacingToken { character: Option<char> }` reemplaza el `PlacingToken` actual
+- [x] Primera tecla imprimible tras `t` asigna `character: Some(c)` y cambia `cursor.character` y `cursor.fg_color`
+- [x] El token se coloca al hacer commit con `fg_color: PALETTE[fg_color_i]`
+- [x] `commit()` y `revert()` manejan `PlacingToken` (quitar los `todo!()`)
+- [x] El render muestra el título/borde correcto para `PlacingToken`
 
 ---
 
@@ -91,3 +111,10 @@ Antes del layout, el código se reorganiza:
 
 Puedo dibujar un mapa con colores de zona y caracteres de terreno, colocar tokens,
 guardar con `:w sesion`, cerrar, volver a abrir, cargar con `:e sesion`, y ver exactamente el mismo estado.
+
+## Notas de diseño (para fases futuras)
+
+- **Undo stack**: cada acción confirmada empuja un `Action` (enum con variantes por tipo de cambio)
+  a un `Vec`. `u` hace pop y revierte. Coherente con el modelo commit ya implementado.
+- **Tokens apilados**: múltiples tokens pueden coexistir en una celda. Pendiente: UI para elegir cuál mover cuando hay más de uno.
+- Unicode (kanji, emoji) es técnicamente soportado por `char` pero caracteres anchos (2 celdas) rompen el grid — pendiente para el futuro.

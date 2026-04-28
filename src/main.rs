@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io;
 
+use color_eyre::eyre::Result;
+
 use crossterm::event::KeyModifiers;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::style::Modifier;
@@ -79,7 +81,7 @@ enum Mode {
     Rectangle { anchor: Position },
     DeletingTerrain,
     DeletingRect { anchor: Position },
-    PlacingToken,
+    PlacingToken { character: Option<char> },
     MovingToken(usize),
 }
 
@@ -106,16 +108,18 @@ pub struct App {
 
 impl Cursor {
     const fn reset_cursor(&mut self) {
-        self.pos.x = self.prev_position.x;
-        self.pos.y = self.prev_position.y;
+        self.pos = self.prev_position;
+        self.fg_color = Color::Yellow;
+        self.character = '@';
+    }
+
+    const fn stay_here(&mut self) {
+        self.fg_color = Color::Yellow;
         self.character = '@';
     }
 
     const fn save_position(&mut self) {
-        self.prev_position = Position {
-            x: self.pos.x,
-            y: self.pos.y,
-        };
+        self.prev_position = self.pos;
     }
 }
 
@@ -146,8 +150,7 @@ impl App {
                 Active(Mode::Drawing) => self.paint(self.brush, self.cursor.pos),
                 Active(Mode::DeletingTerrain) => self.delete(),
                 Active(Mode::MovingToken(i)) => {
-                    self.tokens[i].pos.x = self.cursor.pos.x;
-                    self.tokens[i].pos.y = self.cursor.pos.y;
+                    self.tokens[i].pos = self.cursor.pos;
                 }
                 Active(Mode::Rectangle { anchor: a }) => {
                     self.paint_rec(self.brush, a);
@@ -260,9 +263,7 @@ impl App {
     }
 
     fn token_at(&self) -> Option<usize> {
-        self.tokens
-            .iter()
-            .position(|t| t.pos.x == self.cursor.pos.x && t.pos.y == self.cursor.pos.y)
+        self.tokens.iter().position(|t| t.pos == self.cursor.pos)
     }
 
     const fn move_cursor(&mut self, dx: i16, dy: i16, size: Size) {
@@ -292,9 +293,20 @@ impl App {
                     self.merge_overlay();
                 }
                 Mode::MovingToken(_) => {
-                    self.cursor.character = '@';
+                    self.cursor.stay_here();
                 }
-                Mode::PlacingToken => todo!(),
+                Mode::PlacingToken { character: Some(c) } => {
+                    self.tokens.push(Token {
+                        pos: Position {
+                            x: self.cursor.pos.x,
+                            y: self.cursor.pos.y,
+                        },
+                        character: *c,
+                        fg_color: PALETTE[self.fg_color_i],
+                    });
+                    self.cursor.stay_here();
+                }
+                Mode::PlacingToken { character: None } => {}
             }
         }
         self.overlay.clear();
@@ -303,9 +315,7 @@ impl App {
 
     fn revert(&mut self) {
         if let Active(Mode::MovingToken(i)) = self.state {
-            self.tokens[i].pos.x = self.cursor.prev_position.x;
-            self.tokens[i].pos.y = self.cursor.prev_position.y;
-            self.cursor.character = '@';
+            self.tokens[i].pos = self.cursor.prev_position;
         }
         if self.state != Normal {
             self.overlay.clear();
@@ -334,6 +344,17 @@ impl App {
 
     fn handle_key_press(&mut self, key_event: KeyEvent, size: Size) {
         match key_event.code {
+            KeyCode::Char(c)
+                if self.state == Active(Mode::PlacingToken { character: None })
+                    && !key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                if c == ' ' {
+                    return;
+                }
+                self.state = Active(Mode::PlacingToken { character: Some(c) });
+                self.cursor.fg_color = PALETTE[self.fg_color_i];
+                self.cursor.character = c;
+            }
             KeyCode::Char('q') => self.exit = true,
             KeyCode::Left | KeyCode::Char('h') => self.move_cursor(-1, 0, size),
             KeyCode::Right | KeyCode::Char('l') => self.move_cursor(1, 0, size),
@@ -355,9 +376,6 @@ impl App {
             KeyCode::Char(' ') => {
                 self.commit();
             }
-            // TODO
-            // It seems that we can go from d to D, and maybe we don't want to
-            // do that (or it should at least be smoother)
             KeyCode::Char('d') => {
                 if self.state == Active(Mode::Drawing) {
                     self.commit();
@@ -402,15 +420,11 @@ impl App {
                 }
             }
             KeyCode::Char('t') => {
-                if self.state == Normal {
-                    self.tokens.push(Token {
-                        pos: Position {
-                            x: self.cursor.pos.x,
-                            y: self.cursor.pos.y,
-                        },
-                        character: 't',
-                        fg_color: Color::Red,
-                    });
+                if let Active(Mode::PlacingToken { character: _ }) = self.state {
+                    self.commit();
+                } else if self.state == Normal {
+                    self.cursor.save_position();
+                    self.state = Active(Mode::PlacingToken { character: None });
                 }
             }
             KeyCode::Char('m') => {
@@ -420,6 +434,7 @@ impl App {
                     self.cursor.save_position();
                     self.state = Active(Mode::MovingToken(i));
                     self.cursor.character = self.tokens[i].character;
+                    self.cursor.fg_color = self.tokens[i].fg_color;
                 } else if let Active(Mode::MovingToken(_)) = self.state {
                     self.commit();
                 }
@@ -479,7 +494,8 @@ impl Widget for &App {
             Active(Mode::DeletingTerrain | Mode::DeletingRect { anchor: _ }) => "DELETING",
             Normal => "EXPLORING",
             Active(Mode::MovingToken(_)) => "MOVING",
-            Active(Mode::PlacingToken) => todo!(),
+            Active(Mode::PlacingToken { character: None }) => "PLACING (waiting...)",
+            Active(Mode::PlacingToken { character: Some(_) }) => "PLACING (be nice!)",
         });
 
         let current_color = Line::from(format!(
@@ -498,14 +514,15 @@ impl Widget for &App {
                 Active(Mode::DeletingTerrain | Mode::DeletingRect { anchor: _ }) => Color::Red,
                 Normal => Color::White,
                 Active(Mode::MovingToken(_)) => Color::Yellow,
-                Active(Mode::PlacingToken) => todo!(),
+                Active(Mode::PlacingToken { character: _ }) => Color::Cyan,
             })
             .border_set(border::THICK);
         block.render(area, buf);
     }
 }
 
-fn main() -> io::Result<()> {
+fn main() -> Result<()> {
+    color_eyre::install()?;
     let mut app = App {
         exit: false,
         cursor: Cursor {
@@ -523,5 +540,5 @@ fn main() -> io::Result<()> {
         state: Normal,
         brush: Brush::BgColor(Color::White),
     };
-    ratatui::run(|terminal| app.run(terminal))
+    Ok(ratatui::run(|terminal| app.run(terminal))?)
 }
