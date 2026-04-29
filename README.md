@@ -80,4 +80,5 @@ guardar con `:w sesion`, cerrar, volver a abrir, cargar con `:e sesion`, y ver e
 - **Undo stack**: cada acción confirmada empuja un `Action` (enum con variantes por tipo de cambio)
   a un `Vec`. `u` hace pop y revierte. Coherente con el modelo commit ya implementado.
 - **Tokens apilados**: múltiples tokens pueden coexistir en una celda. Pendiente: UI para elegir cuál mover cuando hay más de uno.
+- **Exportar como texto plano**: `:export <nombre>` (o similar) vuelca el grid actual como un archivo `.txt` — cada celda es su `character`, tokens incluidos. Tiene todo el sentido: la herramienta trabaja con texto, el output natural ES texto.
 - Unicode (kanji, emoji) es técnicamente soportado por `char` pero caracteres anchos (2 celdas) rompen el grid — pendiente para el futuro.
