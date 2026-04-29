@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::ops::Add;
 
 use crossterm::event::KeyModifiers;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -25,11 +26,13 @@ pub struct CellMap {
     state: State,
     tokens: Vec<Token>,
     brush: Brush,
+    offset: Position,
+    visible: (u16, u16),
 }
 
 const PALETTE: [Color; 8] = [
     Color::White,
-    Color::Cyan,
+    Color::Black,
     Color::Red,
     Color::Blue,
     Color::Green,
@@ -41,8 +44,8 @@ const PALETTE: [Color; 8] = [
 const TERRAIN: [char; 8] = ['.', '#', '|', '"', '-', '+', '<', '>'];
 
 // MAN, THIS REDERING SHIT IS SO HARD
-const WIDTH: u16 = 100;
-const HEIGHT: u16 = 23;
+const WIDTH: u16 = 120;
+const HEIGHT: u16 = 70;
 
 // It is probably okay to copy and clone this stuff
 // since it is not that big. Colors are just hexes (maybe)
@@ -96,7 +99,7 @@ enum Mode {
     DeletingTerrain,
     DeletingRect { anchor: Position },
     PlacingToken { character: Option<char> },
-    MovingToken(usize),
+    MovingToken(usize, Position),
 }
 
 #[derive(Debug, PartialEq)]
@@ -106,6 +109,17 @@ enum State {
 }
 
 use State::{Active, Normal};
+
+impl Add for Position {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self {
+            x: self.x + rhs.x,
+            y: self.y + rhs.y,
+        }
+    }
+}
 
 impl Cursor {
     const fn reset_cursor(&mut self) {
@@ -128,12 +142,12 @@ impl CellMap {
     pub fn build() -> Self {
         let mut cells: Vec<Vec<Cell>> = Vec::new();
         // TODO Hardcoded because we need to implement other stuff
-        for _ in 1..WIDTH {
+        for _ in 1..=WIDTH {
             let mut cs = Vec::<Cell>::new();
-            for _ in 1..HEIGHT {
+            for _ in 1..=HEIGHT {
                 cs.push(Cell {
                     fg_color: Color::White,
-                    bg_color: Color::Black,
+                    bg_color: Color::Reset,
                     character: ' ',
                 });
             }
@@ -147,6 +161,8 @@ impl CellMap {
                 character: '@',
                 fg_color: Color::Yellow,
             },
+            offset: Position { x: 0, y: 0 },
+            visible: (0, 0),
             cells,
             overlay: HashMap::new(),
             tokens: Vec::new(),
@@ -160,10 +176,10 @@ impl CellMap {
 
     pub fn update(&mut self) {
         match self.state {
-            Active(Mode::Drawing) => self.paint(self.brush, self.cursor.pos),
+            Active(Mode::Drawing) => self.paint(self.brush, self.cursor.pos + self.offset),
             Active(Mode::DeletingTerrain) => self.delete(),
-            Active(Mode::MovingToken(i)) => {
-                self.tokens[i].pos = self.cursor.pos;
+            Active(Mode::MovingToken(i, _)) => {
+                self.tokens[i].pos = self.cursor.pos + self.offset;
             }
             Active(Mode::Rectangle { anchor: a }) => {
                 self.paint_rec(self.brush, a);
@@ -176,20 +192,17 @@ impl CellMap {
     }
 
     fn delete(&mut self) {
+        let pos = self.cursor.pos + self.offset;
         match self.brush {
-            Brush::BgColor(_) => {
-                self.paint(Brush::BgColor(Color::Black), self.cursor.pos);
-            }
-            Brush::FgColor(_) => {
-                self.paint(Brush::FgColor(Color::White), self.cursor.pos);
-            }
-            Brush::Char(_) => self.paint(Brush::Char(' '), self.cursor.pos),
+            Brush::BgColor(_) => self.paint(Brush::BgColor(Color::Reset), pos),
+            Brush::FgColor(_) => self.paint(Brush::FgColor(Color::White), pos),
+            Brush::Char(_) => self.paint(Brush::Char(' '), pos),
         }
     }
 
     fn delete_rect(&mut self, anchor: Position) {
         let b = match self.brush {
-            Brush::BgColor(_) => Brush::BgColor(Color::Black),
+            Brush::BgColor(_) => Brush::BgColor(Color::Reset),
             Brush::FgColor(_) => Brush::FgColor(Color::White),
             Brush::Char(_) => Brush::Char(' '),
         };
@@ -238,10 +251,10 @@ impl CellMap {
 
         // TODO not sold on this yet
         self.overlay.clear();
-        let second = (self.cursor.pos.x, self.cursor.pos.y);
+        let second = self.cursor.pos + self.offset;
 
-        let dx = second.0.cast_signed() - anchor.x.cast_signed();
-        let dy = second.1.cast_signed() - anchor.y.cast_signed();
+        let dx = second.x.cast_signed() - anchor.x.cast_signed();
+        let dy = second.y.cast_signed() - anchor.y.cast_signed();
 
         let op_x = if dx < 0 { sub_to } else { add_to };
         let op_y = if dy < 0 { sub_to } else { add_to };
@@ -260,17 +273,41 @@ impl CellMap {
     }
 
     fn token_at(&self) -> Option<usize> {
-        self.tokens.iter().position(|t| t.pos == self.cursor.pos)
+        self.tokens
+            .iter()
+            .position(|t| t.pos == self.cursor.pos + self.offset)
     }
 
     const fn move_cursor(&mut self, dx: i16, dy: i16) {
-        let new_x = self.cursor.pos.x.cast_signed() + dx;
-        let new_y = self.cursor.pos.y.cast_signed() + dy;
-        if new_x >= 1 && new_x < WIDTH.cast_signed() {
-            self.cursor.pos.x = new_x.cast_unsigned();
+        if self.visible.0 == 0 || self.visible.1 == 0 {
+            return;
         }
-        if new_y >= 1 && new_y < HEIGHT.cast_signed() {
-            self.cursor.pos.y = new_y.cast_unsigned();
+
+        let new_x = (self.cursor.pos.x.cast_signed() + dx).cast_unsigned();
+        let new_y = (self.cursor.pos.y.cast_signed() + dy).cast_unsigned();
+
+        if new_x > self.visible.0 {
+            if self.offset.x + self.visible.0 < WIDTH {
+                self.offset.x += 1;
+            }
+        } else if new_x == 0 {
+            if self.offset.x > 0 {
+                self.offset.x -= 1;
+            }
+        } else {
+            self.cursor.pos.x = new_x;
+        }
+
+        if new_y > self.visible.1 {
+            if self.offset.y + self.visible.1 < HEIGHT {
+                self.offset.y += 1;
+            }
+        } else if new_y == 0 {
+            if self.offset.y > 0 {
+                self.offset.y -= 1;
+            }
+        } else {
+            self.cursor.pos.y = new_y;
         }
     }
 
@@ -289,15 +326,12 @@ impl CellMap {
                 | Mode::DeletingRect { anchor: _ } => {
                     self.merge_overlay();
                 }
-                Mode::MovingToken(_) => {
+                Mode::MovingToken(..) => {
                     self.cursor.stay_here();
                 }
                 Mode::PlacingToken { character: Some(c) } => {
                     self.tokens.push(Token {
-                        pos: Position {
-                            x: self.cursor.pos.x,
-                            y: self.cursor.pos.y,
-                        },
+                        pos: self.cursor.pos + self.offset,
                         character: *c,
                         fg_color: PALETTE[self.fg_color_i],
                     });
@@ -311,8 +345,8 @@ impl CellMap {
     }
 
     fn revert(&mut self) {
-        if let Active(Mode::MovingToken(i)) = self.state {
-            self.tokens[i].pos = self.cursor.prev_position;
+        if let Active(Mode::MovingToken(i, origin)) = self.state {
+            self.tokens[i].pos = origin;
         }
         if self.state != Normal {
             self.overlay.clear();
@@ -337,6 +371,12 @@ impl CellMap {
                 Brush::FgColor(PALETTE[self.fg_color_i])
             }
         };
+    }
+
+    pub fn set_visible(&mut self, area: Rect) {
+        self.visible = (area.width.saturating_sub(2), area.height.saturating_sub(2));
+        self.cursor.pos.x = self.cursor.pos.x.clamp(1, self.visible.0.max(1));
+        self.cursor.pos.y = self.cursor.pos.y.clamp(1, self.visible.1.max(1));
     }
 
     pub fn handle_key_press(&mut self, key_event: KeyEvent) {
@@ -386,7 +426,7 @@ impl CellMap {
                 } else if self.state == Normal {
                     self.cursor.save_position();
                     self.state = Active(Mode::Rectangle {
-                        anchor: self.cursor.pos,
+                        anchor: self.cursor.pos + self.offset,
                     });
                 }
             }
@@ -411,7 +451,7 @@ impl CellMap {
                 } else if self.state == Normal {
                     self.cursor.save_position();
                     self.state = Active(Mode::DeletingRect {
-                        anchor: self.cursor.pos,
+                        anchor: self.cursor.pos + self.offset,
                     });
                 }
             }
@@ -428,14 +468,41 @@ impl CellMap {
                     && self.state == Normal
                 {
                     self.cursor.save_position();
-                    self.state = Active(Mode::MovingToken(i));
+                    self.state = Active(Mode::MovingToken(i, self.tokens[i].pos));
                     self.cursor.character = self.tokens[i].character;
                     self.cursor.fg_color = self.tokens[i].fg_color;
-                } else if let Active(Mode::MovingToken(_)) = self.state {
+                } else if let Active(Mode::MovingToken(..)) = self.state {
                     self.commit();
                 }
             }
             _ => {}
+        }
+    }
+
+    fn draw_map(&self, area: Rect, buf: &mut Buffer) {
+        for x in 1..=self.visible.0 {
+            for y in 1..=self.visible.1 {
+                let map_x = self.offset.x + x;
+                let map_y = self.offset.y + y;
+
+                if !(1..=WIDTH).contains(&map_x) || !(1..=HEIGHT).contains(&map_y) {
+                    continue;
+                }
+
+                let (nx, ny) = (map_x as usize - 1, map_y as usize - 1);
+
+                if let Some(c) = self.overlay.get(&(nx, ny)) {
+                    buf[(area.x + x, area.y + y)]
+                        .set_char(c.character)
+                        .set_bg(c.bg_color)
+                        .set_fg(c.fg_color);
+                } else {
+                    buf[(area.x + x, area.y + y)]
+                        .set_char(self.cells[nx][ny].character)
+                        .set_bg(self.cells[nx][ny].bg_color)
+                        .set_fg(self.cells[nx][ny].fg_color);
+                }
+            }
         }
     }
 }
@@ -452,29 +519,22 @@ impl CellMap {
 
 impl Widget for &CellMap {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        for x in 1..WIDTH {
-            for y in 1..HEIGHT {
-                let (dx, dy) = (area.x + x, area.y + y);
-                let (nx, ny) = (x as usize - 1, y as usize - 1);
-                if let Some(c) = self.overlay.get(&(nx, ny)) {
-                    buf[(dx, dy)]
-                        .set_char(c.character)
-                        .set_bg(c.bg_color)
-                        .set_fg(c.fg_color);
-                } else {
-                    buf[(dx, dy)]
-                        .set_char(self.cells[nx][ny].character)
-                        .set_bg(self.cells[nx][ny].bg_color)
-                        .set_fg(self.cells[nx][ny].fg_color);
-                }
-            }
-        }
+        self.draw_map(area, buf);
 
         // TODO A way to implement key hints
         // let x = key_hints!(("x", "Borrar"), ("d", "Borrar token"));
 
         for t in &self.tokens {
-            buf[(t.pos.x, t.pos.y)]
+            if t.pos.x <= self.offset.x
+                || t.pos.x > self.offset.x + self.visible.0
+                || t.pos.y <= self.offset.y
+                || t.pos.y > self.offset.y + self.visible.1
+            {
+                continue;
+            }
+            let screen_x = area.x + t.pos.x - self.offset.x;
+            let screen_y = area.y + t.pos.y - self.offset.y;
+            buf[(screen_x, screen_y)]
                 .set_char(t.character)
                 .set_fg(t.fg_color)
                 .set_style(Modifier::BOLD);
@@ -485,17 +545,18 @@ impl Widget for &CellMap {
             .set_fg(self.cursor.fg_color)
             .set_style(Modifier::BOLD);
 
-        let title = Line::from(match self.state {
+        let mut title = Line::from(match self.state {
             Active(Mode::Drawing | Mode::Rectangle { anchor: _ }) => "DRAWING",
             Active(Mode::DeletingTerrain | Mode::DeletingRect { anchor: _ }) => "DELETING",
             Normal => "EXPLORING",
-            Active(Mode::MovingToken(_)) => "MOVING",
+            Active(Mode::MovingToken(..)) => "MOVING",
             Active(Mode::PlacingToken { character: None }) => "PLACING (waiting...)",
             Active(Mode::PlacingToken { character: Some(_) }) => "PLACING (be nice!)",
         });
+        title.push_span(format!(" {:?} ", self.offset));
 
         let current_color = Line::from(format!(
-            "COLOR: {:?} | {}",
+            "COLOR: {:?} | {} ",
             self.brush,
             self.token_at()
                 .map(|i| self.tokens[i].to_string())
@@ -509,7 +570,7 @@ impl Widget for &CellMap {
                 Active(Mode::Drawing | Mode::Rectangle { anchor: _ }) => Color::Magenta,
                 Active(Mode::DeletingTerrain | Mode::DeletingRect { anchor: _ }) => Color::Red,
                 Normal => Color::White,
-                Active(Mode::MovingToken(_)) => Color::Yellow,
+                Active(Mode::MovingToken(..)) => Color::Yellow,
                 Active(Mode::PlacingToken { character: _ }) => Color::Cyan,
             })
             .border_set(border::THICK);

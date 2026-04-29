@@ -7,7 +7,7 @@ use color_eyre::eyre::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
     DefaultTerminal, Frame,
-    layout::{Constraint, Layout, Size},
+    layout::{Constraint, Layout},
 };
 
 use crate::map_cell::CellMap;
@@ -45,11 +45,13 @@ impl App {
         Ok(())
     }
 
-    fn draw(&self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame) {
         let layout = Layout::default()
             .direction(ratatui::layout::Direction::Vertical)
             .constraints(vec![Constraint::Fill(1), Constraint::Length(2)])
             .split(frame.area());
+
+        self.cell_map.set_visible(layout[0]);
 
         frame.render_widget(&self.cell_map, layout[0]);
     }
