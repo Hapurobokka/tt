@@ -1,3 +1,4 @@
+use crate::color_serde;
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::Add;
@@ -15,7 +16,6 @@ use ratatui::{
 };
 
 #[derive(Debug)]
-
 pub struct CellMap {
     cursor: Cursor,
     cells: Vec<Vec<Cell>>,
@@ -28,6 +28,12 @@ pub struct CellMap {
     brush: Brush,
     offset: Position,
     visible: (u16, u16),
+}
+
+#[derive(Serialize, Deserialize)]
+struct MapState {
+    cells: Vec<Vec<Cell>>,
+    tokens: Vec<Token>,
 }
 
 const PALETTE: [Color; 8] = [
@@ -50,15 +56,17 @@ const HEIGHT: u16 = 70;
 // It is probably okay to copy and clone this stuff
 // since it is not that big. Colors are just hexes (maybe)
 // and chars are only ints
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub struct Cell {
+    #[serde(with = "color_serde")]
     bg_color: Color,
+    #[serde(with = "color_serde")]
     fg_color: Color,
     character: char,
 }
 
 // but it makes feel kinda dumb lol
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 struct Position {
     x: u16,
     y: u16,
@@ -72,10 +80,11 @@ struct Cursor {
     fg_color: Color,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Token {
     pos: Position,
     character: char,
+    #[serde(with = "color_serde")]
     fg_color: Color,
 }
 
@@ -109,6 +118,7 @@ enum State {
 }
 
 use State::{Active, Normal};
+use serde::{Deserialize, Serialize};
 
 impl Add for Position {
     type Output = Self;
@@ -575,5 +585,73 @@ impl Widget for &CellMap {
             })
             .border_set(border::THICK);
         block.render(area, buf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::style::Color;
+
+    #[test]
+    fn test_color_roundtrip() {
+        let colors = [
+            Color::White,
+            Color::Black,
+            Color::Red,
+            Color::Blue,
+            Color::Green,
+            Color::Yellow,
+            Color::Magenta,
+            Color::Gray,
+        ];
+
+        for color in colors {
+            let serialized = serde_json::to_string(&ColorWrapper(color)).unwrap();
+            let deserialized: ColorWrapper = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(color, deserialized.0);
+        }
+    }
+
+    // Wrapper auxiliar para poder serializar Color solo en el test
+    #[derive(Serialize, Deserialize)]
+    struct ColorWrapper(#[serde(with = "color_serde")] Color);
+
+    #[test]
+    fn test_cell_roundtrip() {
+        let cell = Cell {
+            bg_color: Color::Black,
+            fg_color: Color::White,
+            character: 'A',
+        };
+
+        let serialized = serde_json::to_string(&cell).unwrap();
+        let deserialized: Cell = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(cell.bg_color, deserialized.bg_color);
+        assert_eq!(cell.fg_color, deserialized.fg_color);
+        assert_eq!(cell.character, deserialized.character);
+    }
+
+    #[test]
+    fn test_color_json_format() {
+        // Verifica que el JSON quede como esperamos visualmente
+        let cell = Cell {
+            bg_color: Color::Black,
+            fg_color: Color::Red,
+            character: 'X',
+        };
+
+        let serialized = serde_json::to_string(&cell).unwrap();
+        assert!(serialized.contains("\"black\""));
+        assert!(serialized.contains("\"red\""));
+    }
+
+    #[test]
+    fn test_unknown_color_fails() {
+        // Un color desconocido debe fallar limpiamente
+        let bad_json = r#"{"bg_color":"purple","fg_color":"white","character":"A"}"#;
+        let result: Result<Cell, _> = serde_json::from_str(bad_json);
+        assert!(result.is_err());
     }
 }

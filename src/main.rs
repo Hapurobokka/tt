@@ -1,3 +1,4 @@
+mod color_serde;
 mod map_cell;
 
 use std::io;
