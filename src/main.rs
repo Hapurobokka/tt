@@ -1,17 +1,21 @@
 mod color_serde;
 mod map_cell;
+mod minibuffer;
 
 use std::io;
 
 use color_eyre::eyre::Result;
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout},
 };
 
-use crate::map_cell::CellMap;
+use crate::{
+    map_cell::{CellMap, Mode},
+    minibuffer::{MiniBuffer, MiniBufferEvent},
+};
 
 enum Focus {
     Map,
@@ -21,6 +25,7 @@ enum Focus {
 struct App {
     exit: bool,
     cell_map: CellMap,
+    minibuffer: MiniBuffer,
     focus: Focus,
 }
 
@@ -29,6 +34,7 @@ impl App {
         Self {
             exit: false,
             cell_map: CellMap::build(),
+            minibuffer: MiniBuffer::new(),
             focus: Focus::Map,
         }
     }
@@ -49,24 +55,51 @@ impl App {
     fn draw(&mut self, frame: &mut Frame) {
         let layout = Layout::default()
             .direction(ratatui::layout::Direction::Vertical)
-            .constraints(vec![Constraint::Fill(1), Constraint::Length(2)])
+            .constraints(vec![Constraint::Fill(1), Constraint::Length(1)])
             .split(frame.area());
 
         self.cell_map.set_visible(layout[0]);
 
         frame.render_widget(&self.cell_map, layout[0]);
+        frame.render_widget(&self.minibuffer, layout[1]);
+    }
+
+    const fn handle_minibuffer_events(&mut self, ev: &MiniBufferEvent) {
+        match ev {
+            MiniBufferEvent::UnfocusMB => {
+                self.cell_map.set_mode(map_cell::State::Normal);
+                self.focus = Focus::Map;
+            }
+            MiniBufferEvent::CommandSubmited(_) => todo!(),
+        }
+    }
+
+    fn handle_focus(&mut self, key_event: KeyEvent) {
+        match self.focus {
+            Focus::Map => self.cell_map.handle_events(key_event),
+            Focus::MiniBuffer => {
+                if let Some(ev) = self.minibuffer.handle_events(key_event) {
+                    self.handle_minibuffer_events(&ev);
+                }
+            }
+        }
     }
 
     fn handle_events(&mut self) -> io::Result<()> {
         match event::read()? {
             Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-                if key_event.code == KeyCode::Char('q') {
-                    self.exit = true;
-                    return Ok(());
-                }
-                match self.focus {
-                    Focus::Map => self.cell_map.handle_key_press(key_event),
-                    Focus::MiniBuffer => todo!(),
+                match key_event.code {
+                    KeyCode::Char('q') => {
+                        self.exit = true;
+                        return Ok(());
+                    }
+                    KeyCode::Char(':') => {
+                        self.cell_map
+                            .set_mode(map_cell::State::Active(Mode::Prompt));
+                        self.minibuffer.on_enter();
+                        self.focus = Focus::MiniBuffer;
+                    }
+                    _ => self.handle_focus(key_event),
                 }
             }
             _ => {}

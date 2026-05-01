@@ -15,6 +15,50 @@ use ratatui::{
     widgets::{Block, Widget},
 };
 
+use State::{Active, Normal};
+use serde::{Deserialize, Serialize};
+
+const PALETTE: [Color; 8] = [
+    Color::White,
+    Color::Black,
+    Color::Red,
+    Color::Blue,
+    Color::Green,
+    Color::Yellow,
+    Color::Magenta,
+    Color::Gray,
+];
+
+const TERRAIN: [char; 8] = ['.', '#', '|', '"', '-', '+', '<', '>'];
+
+// MAN, THIS REDERING SHIT IS SO HARD
+const WIDTH: u16 = 120;
+const HEIGHT: u16 = 70;
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum Brush {
+    BgColor(Color),
+    FgColor(Color),
+    Char(char),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Mode {
+    Drawing,
+    Rectangle { anchor: Position },
+    DeletingTerrain,
+    DeletingRect { anchor: Position },
+    PlacingToken { character: Option<char> },
+    MovingToken(usize, Position),
+    Prompt,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum State {
+    Normal,
+    Active(Mode),
+}
+
 #[derive(Debug)]
 pub struct CellMap {
     cursor: Cursor,
@@ -36,23 +80,6 @@ struct MapState {
     tokens: Vec<Token>,
 }
 
-const PALETTE: [Color; 8] = [
-    Color::White,
-    Color::Black,
-    Color::Red,
-    Color::Blue,
-    Color::Green,
-    Color::Yellow,
-    Color::Magenta,
-    Color::Gray,
-];
-
-const TERRAIN: [char; 8] = ['.', '#', '|', '"', '-', '+', '<', '>'];
-
-// MAN, THIS REDERING SHIT IS SO HARD
-const WIDTH: u16 = 120;
-const HEIGHT: u16 = 70;
-
 // It is probably okay to copy and clone this stuff
 // since it is not that big. Colors are just hexes (maybe)
 // and chars are only ints
@@ -66,8 +93,8 @@ pub struct Cell {
 }
 
 // but it makes feel kinda dumb lol
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-struct Position {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Position {
     x: u16,
     y: u16,
 }
@@ -93,32 +120,6 @@ impl fmt::Display for Token {
         write!(f, "'{}' ({}, {})", self.character, self.pos.x, self.pos.y)
     }
 }
-
-#[derive(Debug, PartialEq, Clone, Copy)]
-enum Brush {
-    BgColor(Color),
-    FgColor(Color),
-    Char(char),
-}
-
-#[derive(Debug, PartialEq)]
-enum Mode {
-    Drawing,
-    Rectangle { anchor: Position },
-    DeletingTerrain,
-    DeletingRect { anchor: Position },
-    PlacingToken { character: Option<char> },
-    MovingToken(usize, Position),
-}
-
-#[derive(Debug, PartialEq)]
-enum State {
-    Normal,
-    Active(Mode),
-}
-
-use State::{Active, Normal};
-use serde::{Deserialize, Serialize};
 
 impl Add for Position {
     type Output = Self;
@@ -347,7 +348,7 @@ impl CellMap {
                     });
                     self.cursor.stay_here();
                 }
-                Mode::PlacingToken { character: None } => {}
+                Mode::PlacingToken { character: None } | Mode::Prompt => {}
             }
         }
         self.overlay.clear();
@@ -389,7 +390,11 @@ impl CellMap {
         self.cursor.pos.y = self.cursor.pos.y.clamp(1, self.visible.1.max(1));
     }
 
-    pub fn handle_key_press(&mut self, key_event: KeyEvent) {
+    pub const fn set_mode(&mut self, state: State) {
+        self.state = state;
+    }
+
+    pub fn handle_events(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Char(c)
                 if self.state == Active(Mode::PlacingToken { character: None })
@@ -562,6 +567,7 @@ impl Widget for &CellMap {
             Active(Mode::MovingToken(..)) => "MOVING",
             Active(Mode::PlacingToken { character: None }) => "PLACING (waiting...)",
             Active(Mode::PlacingToken { character: Some(_) }) => "PLACING (be nice!)",
+            Active(Mode::Prompt) => "PROMPTING...",
         });
         title.push_span(format!(" {:?} ", self.offset));
 
@@ -582,6 +588,7 @@ impl Widget for &CellMap {
                 Normal => Color::White,
                 Active(Mode::MovingToken(..)) => Color::Yellow,
                 Active(Mode::PlacingToken { character: _ }) => Color::Cyan,
+                Active(Mode::Prompt) => Color::Green,
             })
             .border_set(border::THICK);
         block.render(area, buf);

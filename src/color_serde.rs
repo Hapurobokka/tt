@@ -14,7 +14,7 @@ where
         Color::Yellow => "yellow",
         Color::Magenta => "magenta",
         Color::Gray => "gray",
-        _ => "white",
+        _ => &color.to_string(),
     };
     s.serialize(serializer)
 }
