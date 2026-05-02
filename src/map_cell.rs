@@ -1,8 +1,5 @@
 use crate::color_serde;
-use std::collections::HashMap;
-use std::fmt;
-use std::ops::Add;
-
+use color_eyre::eyre::{Context, Report, Result};
 use crossterm::event::KeyModifiers;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::style::Modifier;
@@ -14,6 +11,11 @@ use ratatui::{
     text::Line,
     widgets::{Block, Widget},
 };
+use std::collections::HashMap;
+use std::fmt;
+use std::fs::File;
+use std::io::Write;
+use std::ops::Add;
 
 use State::{Active, Normal};
 use serde::{Deserialize, Serialize};
@@ -107,7 +109,7 @@ struct Cursor {
     fg_color: Color,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Token {
     pos: Position,
     character: char,
@@ -200,6 +202,18 @@ impl CellMap {
             }
             _ => {}
         }
+    }
+
+    pub fn save_map(&self) -> Result<String> {
+        let ms = MapState {
+            cells: self.cells.clone(),
+            tokens: self.tokens.clone(),
+        };
+        let j = serde_json::to_string(&ms).wrap_err("Failed to serialize map")?;
+        let mut f = File::create("test.json").wrap_err("Failed to open file 'test.json'")?;
+        f.write(j.as_bytes())
+            .wrap_err("Failed to write to file 'test.json'")?;
+        Ok(String::from("Succesfully written to 'test.json'"))
     }
 
     fn delete(&mut self) {

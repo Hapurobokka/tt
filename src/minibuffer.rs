@@ -1,5 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent};
-use ratatui::{buffer::Buffer, layout::Rect, text::Line, widgets::Widget};
+use ratatui::{buffer::Buffer, layout::Rect, style::Color, text::Line, widgets::Widget};
 
 pub enum MiniBufferEvent {
     UnfocusMB,
@@ -8,6 +8,7 @@ pub enum MiniBufferEvent {
 
 pub struct MiniBuffer {
     pub text: String,
+    color: Color,
     prev_text: String,
 }
 
@@ -16,11 +17,17 @@ impl MiniBuffer {
         Self {
             text: String::from("Hola Diego"),
             prev_text: String::new(),
+            color: Color::White,
         }
     }
 
     pub fn on_enter(&mut self) {
         self.prev_text = self.text.clone();
+    }
+
+    pub fn set_text(&mut self, text: String, color: Color) {
+        self.text = text;
+        self.color = color;
     }
 
     pub fn handle_events(&mut self, key_event: KeyEvent) -> Option<MiniBufferEvent> {
@@ -44,7 +51,7 @@ impl MiniBuffer {
 
 impl Widget for &MiniBuffer {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let message = Line::from(self.text.clone());
+        let message = Line::from(self.text.clone()).style(self.color);
         message.render(area, buf);
     }
 }

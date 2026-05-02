@@ -10,6 +10,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout},
+    style::Color,
 };
 
 use crate::{
@@ -99,6 +100,10 @@ impl App {
                         self.minibuffer.on_enter();
                         self.focus = Focus::MiniBuffer;
                     }
+                    KeyCode::Char('s') => match self.cell_map.save_map() {
+                        Ok(msg) => self.minibuffer.set_text(msg, Color::Green),
+                        Err(err) => self.minibuffer.set_text(format!("{}", err), Color::Red),
+                    },
                     _ => self.handle_focus(key_event),
                 }
             }
