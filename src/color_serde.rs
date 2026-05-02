@@ -1,6 +1,7 @@
 use ratatui::style::Color;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 pub fn serialize<S>(color: &Color, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,

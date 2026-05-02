@@ -102,7 +102,7 @@ impl App {
                     }
                     KeyCode::Char('s') => match self.cell_map.save_map() {
                         Ok(msg) => self.minibuffer.set_text(msg, Color::Green),
-                        Err(err) => self.minibuffer.set_text(format!("{}", err), Color::Red),
+                        Err(err) => self.minibuffer.set_text(format!("{err}"), Color::Red),
                     },
                     _ => self.handle_focus(key_event),
                 }
