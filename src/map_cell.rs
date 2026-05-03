@@ -14,7 +14,7 @@ use ratatui::{
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::ops::Add;
 
 use State::{Active, Normal};
@@ -34,8 +34,8 @@ const PALETTE: [Color; 8] = [
 const TERRAIN: [char; 8] = ['.', '#', '|', '"', '-', '+', '<', '>'];
 
 // MAN, THIS REDERING SHIT IS SO HARD
-const WIDTH: u16 = 120;
-const HEIGHT: u16 = 70;
+const WIDTH: u16 = 20;
+const HEIGHT: u16 = 20;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum Brush {
@@ -162,7 +162,7 @@ impl Default for Cell {
     fn default() -> Self {
         Self {
             fg_color: Color::White,
-            bg_color: Color::Reset,
+            bg_color: Color::Black,
             character: ' ',
         }
     }
@@ -219,6 +219,8 @@ impl CellMap {
     }
 
     pub fn save_map(&self) -> Result<String> {
+        // might move to a map later
+        // cause this could be much more efficient
         let cells = self
             .cells
             .iter()
@@ -254,10 +256,67 @@ impl CellMap {
         Ok(String::from("Succesfully written to 'test.json'"))
     }
 
+    pub fn load_map() -> Result<Self> {
+        let mut f = File::open("test.json")?;
+        let mut buffer = String::new();
+
+        let _ = f.read_to_string(&mut buffer)?;
+        let repr: MapState = serde_json::from_str(&buffer)?;
+
+        let good_cells = repr
+            .cells
+            .iter()
+            .map(|c| {
+                (
+                    (c.position.x, c.position.y),
+                    Cell {
+                        character: c.character,
+                        fg_color: c.fg_color,
+                        bg_color: c.bg_color,
+                    },
+                )
+            })
+            .collect::<HashMap<(u16, u16), Cell>>();
+
+        let mut cells: Vec<Vec<Cell>> = Vec::new();
+
+        for i in 0..repr.size.0 {
+            let mut cs = Vec::<Cell>::new();
+            for j in 0..repr.size.1 {
+                if let Some(c) = good_cells.get(&(i, j)) {
+                    cs.push(*c);
+                } else {
+                    cs.push(Cell::default());
+                }
+            }
+            cells.push(cs);
+        }
+
+        Ok(Self {
+            size: repr.size,
+            cursor: Cursor {
+                pos: Position { x: 1, y: 1 },
+                prev_position: Position { x: 1, y: 1 },
+                character: '@',
+                fg_color: Color::Yellow,
+            },
+            offset: Position { x: 0, y: 0 },
+            visible: (0, 0),
+            cells,
+            overlay: HashMap::new(),
+            tokens: repr.tokens,
+            bg_color_i: 0,
+            fg_color_i: 0,
+            char_i: 0,
+            state: Normal,
+            brush: Brush::BgColor(Color::White),
+        })
+    }
+
     fn delete(&mut self) {
         let pos = self.cursor.pos + self.offset;
         match self.brush {
-            Brush::BgColor(_) => self.paint(Brush::BgColor(Color::Reset), pos),
+            Brush::BgColor(_) => self.paint(Brush::BgColor(Color::Black), pos),
             Brush::FgColor(_) => self.paint(Brush::FgColor(Color::White), pos),
             Brush::Char(_) => self.paint(Brush::Char(' '), pos),
         }
@@ -265,7 +324,7 @@ impl CellMap {
 
     fn delete_rect(&mut self, anchor: Position) {
         let b = match self.brush {
-            Brush::BgColor(_) => Brush::BgColor(Color::Reset),
+            Brush::BgColor(_) => Brush::BgColor(Color::Black),
             Brush::FgColor(_) => Brush::FgColor(Color::White),
             Brush::Char(_) => Brush::Char(' '),
         };

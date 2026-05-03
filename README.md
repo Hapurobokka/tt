@@ -51,24 +51,24 @@ Antes del layout, el código se reorganiza:
 - [ ] El área se divide en: mapa (izquierda), panel lateral (derecha), barra inferior
 - [ ] El panel lateral muestra la paleta de colores con el color actual resaltado
 - [ ] El panel lateral muestra la lista de tokens activos (carácter + posición)
-- [ ] La barra inferior muestra el estado actual y el color seleccionado en modo normal
+- [x] La barra inferior muestra el estado actual y el color seleccionado en modo normal
 
 **Comandos**
 
 - [ ] Existe `State::Command(String)` para almacenar el input del usuario
-- [ ] Presionar `:` entra en modo comando (la barra inferior se convierte en input)
-- [ ] Los caracteres escritos se acumulan en el `String` del estado
-- [ ] `Backspace` borra el último carácter del comando
-- [ ] `Esc` cancela el comando y vuelve a `Normal`
+- [x] Presionar `:` entra en modo comando (la barra inferior se convierte en input)
+- [x] Los caracteres escritos se acumulan en el `String` del estado
+- [x] `Backspace` borra el último carácter del comando
+- [x] `Esc` cancela el comando y vuelve a `Normal`
 - [ ] `Enter` ejecuta el comando
 
 **Save/Load**
 
-- [ ] `Cell` y `Token` implementan `Serialize` y `Deserialize`
-- [ ] `MapState` también es serializable (es lo único que se guarda)
+- [x] `Cell` y `Token` implementan `Serialize` y `Deserialize`
+- [x] `MapState` también es serializable (es lo único que se guarda)
 - [ ] `:w <nombre>` guarda el mapa actual en `<nombre>.json`
 - [ ] `:e <nombre>` carga un mapa desde `<nombre>.json` y reemplaza el estado actual
-- [ ] Si el archivo no existe o es inválido, se muestra un mensaje de error en la barra inferior
+- [x] Si el archivo no existe o es inválido, se muestra un mensaje de error en la barra inferior
 
 ### Criterio de éxito
 

@@ -104,6 +104,10 @@ impl App {
                         Ok(msg) => self.minibuffer.set_text(msg, Color::Green),
                         Err(err) => self.minibuffer.set_text(format!("{err}"), Color::Red),
                     },
+                    KeyCode::Char('L') => match map_cell::CellMap::load_map() {
+                        Ok(new_map) => self.cell_map = new_map,
+                        Err(err) => self.minibuffer.set_text(format!("{err}"), Color::Red),
+                    },
                     _ => self.handle_focus(key_event),
                 }
             }
