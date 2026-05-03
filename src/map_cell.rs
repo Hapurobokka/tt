@@ -408,8 +408,11 @@ impl CellMap {
         let new_x = (self.cursor.pos.x.cast_signed() + dx).cast_unsigned();
         let new_y = (self.cursor.pos.y.cast_signed() + dy).cast_unsigned();
 
-        if new_x > self.visible.0 {
-            if self.offset.x + self.visible.0 < WIDTH {
+        let max_x = if self.visible.0 < self.size.0 { self.visible.0 } else { self.size.0 - self.offset.x };
+        let max_y = if self.visible.1 < self.size.1 { self.visible.1 } else { self.size.1 - self.offset.y };
+
+        if new_x > max_x {
+            if self.offset.x + self.visible.0 < self.size.0 {
                 self.offset.x += 1;
             }
         } else if new_x == 0 {
@@ -420,8 +423,8 @@ impl CellMap {
             self.cursor.pos.x = new_x;
         }
 
-        if new_y > self.visible.1 {
-            if self.offset.y + self.visible.1 < HEIGHT {
+        if new_y > max_y {
+            if self.offset.y + self.visible.1 < self.size.1 {
                 self.offset.y += 1;
             }
         } else if new_y == 0 {
@@ -611,7 +614,7 @@ impl CellMap {
                 let map_x = self.offset.x + x;
                 let map_y = self.offset.y + y;
 
-                if !(1..=WIDTH).contains(&map_x) || !(1..=HEIGHT).contains(&map_y) {
+                if !(1..=self.size.0).contains(&map_x) || !(1..=self.size.1).contains(&map_y) {
                     continue;
                 }
 
