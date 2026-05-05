@@ -34,8 +34,8 @@ const PALETTE: [Color; 8] = [
 const TERRAIN: [char; 8] = ['.', '#', '|', '"', '-', '+', '<', '>'];
 
 // MAN, THIS REDERING SHIT IS SO HARD
-const WIDTH: u16 = 20;
-const HEIGHT: u16 = 20;
+const WIDTH: u16 = 200;
+const HEIGHT: u16 = 100;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum Brush {
@@ -66,7 +66,7 @@ pub struct CellMap {
     size: (u16, u16),
     cursor: Cursor,
     cells: Vec<Vec<Cell>>,
-    overlay: HashMap<(usize, usize), Cell>,
+    overlay: HashMap<Position, Cell>,
     bg_color_i: usize,
     fg_color_i: usize,
     char_i: usize,
@@ -128,6 +128,13 @@ struct Cursor {
 pub struct Token {
     character: char,
     fg_color: Color,
+}
+
+pub enum MapEvent {
+    Quit,
+    CommandFocus,
+    SaveMap,
+    LoadedMap,
 }
 
 impl fmt::Display for Token {
@@ -355,13 +362,13 @@ impl CellMap {
     }
 
     fn paint(&mut self, brush: Brush, pos: Position) {
-        let nx = pos.x as usize - 1;
-        let ny = pos.y as usize - 1;
+        let x = pos.x - 1;
+        let y = pos.y - 1;
         let curr_cell = self
             .overlay
-            .get(&(nx, ny))
+            .get(&Position { x, y })
             .copied()
-            .unwrap_or_else(|| self.cells[nx][ny]);
+            .unwrap_or_else(|| self.cells[x as usize][y as usize]);
         match brush {
             Brush::BgColor(c) => {
                 let cell = Cell {
@@ -369,7 +376,7 @@ impl CellMap {
                     fg_color: curr_cell.fg_color,
                     character: curr_cell.character,
                 };
-                self.overlay.insert((nx, ny), cell);
+                self.overlay.insert(Position { x, y }, cell);
             }
             Brush::Char(ch) => {
                 let cell = Cell {
@@ -377,7 +384,7 @@ impl CellMap {
                     fg_color: curr_cell.fg_color,
                     character: ch,
                 };
-                self.overlay.insert((nx, ny), cell);
+                self.overlay.insert(Position { x, y }, cell);
             }
             Brush::FgColor(c) => {
                 let cell = Cell {
@@ -385,7 +392,7 @@ impl CellMap {
                     fg_color: c,
                     character: curr_cell.character,
                 };
-                self.overlay.insert((nx, ny), cell);
+                self.overlay.insert(Position { x, y }, cell);
             }
         }
     }
@@ -475,8 +482,8 @@ impl CellMap {
     }
 
     fn merge_overlay(&mut self) {
-        for ((x, y), v) in &self.overlay {
-            self.cells[*x][*y] = *v;
+        for (pos, v) in &self.overlay {
+            self.cells[pos.x as usize][pos.y as usize] = *v;
         }
     }
 
@@ -553,19 +560,24 @@ impl CellMap {
         self.state = state;
     }
 
-    pub fn handle_events(&mut self, key_event: KeyEvent) {
-        match key_event.code {
-            KeyCode::Char(c)
-                if self.state == Active(Mode::PlacingToken { character: None })
-                    && !key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+    fn handle_token_placement(&mut self, key_event: KeyEvent) -> bool {
+        if let KeyCode::Char(c) = key_event.code {
+            if self.state == Active(Mode::PlacingToken { character: None })
+                && !key_event.modifiers.contains(KeyModifiers::CONTROL)
             {
-                if c == ' ' {
-                    return;
+                if c != ' ' {
+                    self.state = Active(Mode::PlacingToken { character: Some(c) });
+                    self.cursor.fg_color = PALETTE[self.fg_color_i];
+                    self.cursor.character = c;
                 }
-                self.state = Active(Mode::PlacingToken { character: Some(c) });
-                self.cursor.fg_color = PALETTE[self.fg_color_i];
-                self.cursor.character = c;
+                return true;
             }
+        }
+        false
+    }
+
+    fn handle_movement(&mut self, key_event: KeyEvent) -> bool {
+        match key_event.code {
             KeyCode::Left | KeyCode::Char('h') => self.move_cursor(-1, 0),
             KeyCode::Right | KeyCode::Char('l') => self.move_cursor(1, 0),
             KeyCode::Up | KeyCode::Char('k') => self.move_cursor(0, -1),
@@ -574,18 +586,33 @@ impl CellMap {
             KeyCode::Char('u') => self.move_cursor(1, -1),
             KeyCode::Char('b') => self.move_cursor(-1, 1),
             KeyCode::Char('n') => self.move_cursor(1, 1),
+            _ => return false,
+        }
+        true
+    }
+
+    fn handle_brush_selection(&mut self, key_event: KeyEvent) -> bool {
+        match key_event.code {
             KeyCode::Tab => match self.brush {
                 Brush::BgColor(_) => self.brush = Brush::FgColor(PALETTE[self.fg_color_i]),
                 Brush::FgColor(_) => self.brush = Brush::Char(TERRAIN[self.char_i]),
                 Brush::Char(_) => self.brush = Brush::BgColor(PALETTE[self.bg_color_i]),
             },
+            KeyCode::BackTab => match self.brush {
+                Brush::BgColor(_) => self.brush = Brush::Char(TERRAIN[self.char_i]),
+                Brush::FgColor(_) => self.brush = Brush::BgColor(PALETTE[self.bg_color_i]),
+                Brush::Char(_) => self.brush = Brush::FgColor(PALETTE[self.fg_color_i]),
+            },
             KeyCode::Char(c @ '1'..='8') => self.change_brush(c),
+            _ => return false,
+        }
+        true
+    }
+
+    fn handle_mode_transitions(&mut self, key_event: KeyEvent) -> bool {
+        match key_event.code {
             KeyCode::Esc => self.revert(),
-            // The keys down here will do "commits", aka, here is where we put the keys
-            // that actually do something.
-            KeyCode::Char(' ') => {
-                self.commit();
-            }
+            KeyCode::Char(' ') => self.commit(),
             KeyCode::Char('d') => {
                 if self.state == Active(Mode::Drawing) {
                     self.commit();
@@ -652,8 +679,39 @@ impl CellMap {
                     self.cursor.fg_color = t.fg_color;
                 }
             }
-            _ => {}
+            _ => return false,
         }
+        true
+    }
+
+    fn handle_global_commands(&self, key_event: KeyEvent) -> Option<MapEvent> {
+        match key_event.code {
+            KeyCode::Char('q') => Some(MapEvent::Quit),
+            KeyCode::Char(':') => Some(MapEvent::CommandFocus),
+            KeyCode::Char('s') => Some(MapEvent::SaveMap),
+            KeyCode::Char('L') => Some(MapEvent::LoadedMap),
+            _ => None,
+        }
+    }
+
+    pub fn handle_events(&mut self, key_event: KeyEvent) -> Option<MapEvent> {
+        if self.handle_token_placement(key_event) {
+            return None;
+        }
+
+        if self.handle_movement(key_event) {
+            return None;
+        }
+
+        if self.handle_brush_selection(key_event) {
+            return None;
+        }
+
+        if self.handle_mode_transitions(key_event) {
+            return None;
+        }
+
+        self.handle_global_commands(key_event)
     }
 
     fn draw_map(&self, area: Rect, buf: &mut Buffer) {
@@ -668,7 +726,10 @@ impl CellMap {
 
                 let (nx, ny) = (map_x as usize - 1, map_y as usize - 1);
 
-                if let Some(c) = self.overlay.get(&(nx, ny)) {
+                if let Some(c) = self.overlay.get(&Position {
+                    x: map_x - 1,
+                    y: map_y - 1,
+                }) {
                     buf[(area.x + x, area.y + y)]
                         .set_char(c.character)
                         .set_bg(c.bg_color)

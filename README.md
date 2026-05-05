@@ -68,7 +68,7 @@ Antes del layout, el código se reorganiza:
 - [x] `MapState` también es serializable (es lo único que se guarda)
 - [ ] `:w <nombre>` guarda el mapa actual en `<nombre>.json`
 - [ ] `:e <nombre>` carga un mapa desde `<nombre>.json` y reemplaza el estado actual
-- [x] Si el archivo no existe o es inválido, se muestra un mensaje de error en la barra inferior
+- [ ] Si el archivo no existe o es inválido, se muestra un mensaje de error en la barra inferior
 
 ### Criterio de éxito
 
@@ -79,6 +79,6 @@ guardar con `:w sesion`, cerrar, volver a abrir, cargar con `:e sesion`, y ver e
 
 - **Undo stack**: cada acción confirmada empuja un `Action` (enum con variantes por tipo de cambio)
   a un `Vec`. `u` hace pop y revierte. Coherente con el modelo commit ya implementado.
-- **Tokens apilados**: múltiples tokens pueden coexistir en una celda. Pendiente: UI para elegir cuál mover cuando hay más de uno.
 - **Exportar como texto plano**: `:export <nombre>` (o similar) vuelca el grid actual como un archivo `.txt` — cada celda es su `character`, tokens incluidos. Tiene todo el sentido: la herramienta trabaja con texto, el output natural ES texto.
 - Unicode (kanji, emoji) es técnicamente soportado por `char` pero caracteres anchos (2 celdas) rompen el grid — pendiente para el futuro.
+- **Tokens multi-celda**: enemigos de 2×2 o 3×3 son comunes en TTRPG. El modelo actual almacena cada `Token` en su posición exacta (`HashMap<Position, Vec<Token>>`); para multi-celda, la mejor opción es añadir `size: (u8, u8)` al struct y guardar el token solo en la celda ancla. Las celdas ocupadas se calculan dinámicamente. `token_at()` deja de ser un lookup O(1) y pasa a ser un escaneo de bounding boxes O(n tokens) — aceptable dado el número esperado de tokens.

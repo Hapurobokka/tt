@@ -6,7 +6,7 @@ use std::io;
 
 use color_eyre::eyre::Result;
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout},
@@ -14,7 +14,7 @@ use ratatui::{
 };
 
 use crate::{
-    map_cell::{CellMap, Mode},
+    map_cell::{CellMap, MapEvent, Mode},
     minibuffer::{MiniBuffer, MiniBufferEvent},
 };
 
@@ -75,9 +75,37 @@ impl App {
         }
     }
 
+    fn handle_map_event(&mut self, ev: &MapEvent) {
+        match ev {
+            MapEvent::Quit => self.exit = true,
+            MapEvent::CommandFocus => {
+                self.cell_map
+                    .set_mode(map_cell::State::Active(Mode::Prompt));
+                self.minibuffer.on_enter();
+                self.focus = Focus::MiniBuffer;
+            }
+            MapEvent::SaveMap => match self.cell_map.save_map() {
+                Ok(msg) => self.minibuffer.set_text(msg, Color::Green),
+                Err(err) => self.minibuffer.set_text(format!("{err}"), Color::Red),
+            },
+            MapEvent::LoadedMap => match map_cell::CellMap::load_map() {
+                Ok(new_map) => {
+                    self.cell_map = new_map;
+                    self.minibuffer
+                        .set_text(String::from("Map loaded correctly :3"), Color::Green);
+                }
+                Err(err) => self.minibuffer.set_text(format!("{err}"), Color::Red),
+            },
+        }
+    }
+
     fn handle_focus(&mut self, key_event: KeyEvent) {
         match self.focus {
-            Focus::Map => self.cell_map.handle_events(key_event),
+            Focus::Map => {
+                if let Some(ev) = self.cell_map.handle_events(key_event) {
+                    self.handle_map_event(&ev);
+                }
+            }
             Focus::MiniBuffer => {
                 if let Some(ev) = self.minibuffer.handle_events(key_event) {
                     self.handle_minibuffer_events(&ev);
@@ -89,27 +117,7 @@ impl App {
     fn handle_events(&mut self) -> io::Result<()> {
         match event::read()? {
             Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-                match key_event.code {
-                    KeyCode::Char('q') => {
-                        self.exit = true;
-                        return Ok(());
-                    }
-                    KeyCode::Char(':') => {
-                        self.cell_map
-                            .set_mode(map_cell::State::Active(Mode::Prompt));
-                        self.minibuffer.on_enter();
-                        self.focus = Focus::MiniBuffer;
-                    }
-                    KeyCode::Char('s') => match self.cell_map.save_map() {
-                        Ok(msg) => self.minibuffer.set_text(msg, Color::Green),
-                        Err(err) => self.minibuffer.set_text(format!("{err}"), Color::Red),
-                    },
-                    KeyCode::Char('L') => match map_cell::CellMap::load_map() {
-                        Ok(new_map) => self.cell_map = new_map,
-                        Err(err) => self.minibuffer.set_text(format!("{err}"), Color::Red),
-                    },
-                    _ => self.handle_focus(key_event),
-                }
+                self.handle_focus(key_event);
             }
             _ => {}
         }
