@@ -51,7 +51,7 @@ pub enum Mode {
     DeletingTerrain,
     DeletingRect { anchor: Position },
     PlacingToken { character: Option<char> },
-    MovingToken(usize, Position),
+    MovingToken(Token, Position),
     Prompt,
 }
 
@@ -71,7 +71,7 @@ pub struct CellMap {
     fg_color_i: usize,
     char_i: usize,
     state: State,
-    tokens: Vec<Token>,
+    tokens: HashMap<Position, Vec<Token>>,
     brush: Brush,
     offset: Position,
     visible: (u16, u16),
@@ -81,7 +81,7 @@ pub struct CellMap {
 struct MapState {
     size: (u16, u16),
     cells: Vec<CellRepr>,
-    tokens: Vec<Token>,
+    tokens: Vec<TokenRepr>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -94,6 +94,14 @@ struct CellRepr {
     character: char,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct TokenRepr {
+    position: Position,
+    character: char,
+    #[serde(with = "color_serde")]
+    fg_color: Color,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Cell {
     bg_color: Color,
@@ -102,7 +110,7 @@ struct Cell {
 }
 
 // but it makes feel kinda dumb lol
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Position {
     x: u16,
     y: u16,
@@ -116,17 +124,15 @@ struct Cursor {
     fg_color: Color,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Token {
-    pos: Position,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Token {
     character: char,
-    #[serde(with = "color_serde")]
     fg_color: Color,
 }
 
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "'{}' ({}, {})", self.character, self.pos.x, self.pos.y)
+        write!(f, "'{}'", self.character)
     }
 }
 
@@ -192,7 +198,7 @@ impl CellMap {
             visible: (0, 0),
             cells,
             overlay: HashMap::new(),
-            tokens: Vec::new(),
+            tokens: HashMap::new(),
             bg_color_i: 0,
             fg_color_i: 0,
             char_i: 0,
@@ -205,9 +211,6 @@ impl CellMap {
         match self.state {
             Active(Mode::Drawing) => self.paint(self.brush, self.cursor.pos + self.offset),
             Active(Mode::DeletingTerrain) => self.delete(),
-            Active(Mode::MovingToken(i, _)) => {
-                self.tokens[i].pos = self.cursor.pos + self.offset;
-            }
             Active(Mode::Rectangle { anchor: a }) => {
                 self.paint_rec(self.brush, a);
             }
@@ -244,10 +247,22 @@ impl CellMap {
             })
             .collect();
 
+        let tokens: Vec<TokenRepr> = self
+            .tokens
+            .iter()
+            .flat_map(|(pos, tokens)| {
+                tokens.iter().map(|t| TokenRepr {
+                    position: *pos,
+                    fg_color: t.fg_color,
+                    character: t.character,
+                })
+            })
+            .collect();
+
         let ms = MapState {
             size: self.size,
             cells,
-            tokens: self.tokens.clone(),
+            tokens,
         };
         let j = serde_json::to_string(&ms).wrap_err("Failed to serialize map")?;
         let mut f = File::create("test.json").wrap_err("Failed to open file 'test.json'")?;
@@ -292,6 +307,24 @@ impl CellMap {
             cells.push(cs);
         }
 
+        let mut tokens = HashMap::<Position, Vec<Token>>::new();
+        for t in repr.tokens {
+            if let Some(v) = tokens.get_mut(&t.position) {
+                v.push(Token {
+                    fg_color: t.fg_color,
+                    character: t.character,
+                });
+            } else {
+                tokens.insert(
+                    t.position,
+                    vec![Token {
+                        fg_color: t.fg_color,
+                        character: t.character,
+                    }],
+                );
+            }
+        }
+
         Ok(Self {
             size: repr.size,
             cursor: Cursor {
@@ -304,7 +337,7 @@ impl CellMap {
             visible: (0, 0),
             cells,
             overlay: HashMap::new(),
-            tokens: repr.tokens,
+            tokens,
             bg_color_i: 0,
             fg_color_i: 0,
             char_i: 0,
@@ -394,10 +427,17 @@ impl CellMap {
         }
     }
 
-    fn token_at(&self) -> Option<usize> {
-        self.tokens
-            .iter()
-            .position(|t| t.pos == self.cursor.pos + self.offset)
+    fn token_at(&self) -> Option<Position> {
+        if self
+            .tokens
+            .get(&(self.cursor.pos + self.offset))?
+            .last()
+            .is_some()
+        {
+            Some(self.cursor.pos + self.offset)
+        } else {
+            None
+        }
     }
 
     const fn move_cursor(&mut self, dx: i16, dy: i16) {
@@ -408,8 +448,16 @@ impl CellMap {
         let new_x = (self.cursor.pos.x.cast_signed() + dx).cast_unsigned();
         let new_y = (self.cursor.pos.y.cast_signed() + dy).cast_unsigned();
 
-        let max_x = if self.visible.0 < self.size.0 { self.visible.0 } else { self.size.0 - self.offset.x };
-        let max_y = if self.visible.1 < self.size.1 { self.visible.1 } else { self.size.1 - self.offset.y };
+        let max_x = if self.visible.0 < self.size.0 {
+            self.visible.0
+        } else {
+            self.size.0 - self.offset.x
+        };
+        let max_y = if self.visible.1 < self.size.1 {
+            self.visible.1
+        } else {
+            self.size.1 - self.offset.y
+        };
 
         if new_x > max_x {
             if self.offset.x + self.visible.0 < self.size.0 {
@@ -442,6 +490,14 @@ impl CellMap {
         }
     }
 
+    fn push_token_to_cell(&mut self, t: Token, pos: Position) {
+        if let Some(v) = self.tokens.get_mut(&pos) {
+            v.push(t);
+        } else {
+            self.tokens.insert(pos, vec![t]);
+        }
+    }
+
     fn commit(&mut self) {
         if let State::Active(mode) = &self.state {
             match mode {
@@ -451,15 +507,18 @@ impl CellMap {
                 | Mode::DeletingRect { anchor: _ } => {
                     self.merge_overlay();
                 }
-                Mode::MovingToken(..) => {
+                Mode::MovingToken(t, _) => {
+                    self.push_token_to_cell(t.clone(), self.cursor.pos + self.offset);
                     self.cursor.stay_here();
                 }
                 Mode::PlacingToken { character: Some(c) } => {
-                    self.tokens.push(Token {
-                        pos: self.cursor.pos + self.offset,
-                        character: *c,
-                        fg_color: PALETTE[self.fg_color_i],
-                    });
+                    self.push_token_to_cell(
+                        Token {
+                            character: *c,
+                            fg_color: PALETTE[self.fg_color_i],
+                        },
+                        self.cursor.pos + self.offset,
+                    );
                     self.cursor.stay_here();
                 }
                 Mode::PlacingToken { character: None } | Mode::Prompt => {}
@@ -470,8 +529,8 @@ impl CellMap {
     }
 
     fn revert(&mut self) {
-        if let Active(Mode::MovingToken(i, origin)) = self.state {
-            self.tokens[i].pos = origin;
+        if let Active(Mode::MovingToken(t, origin)) = &self.state {
+            self.push_token_to_cell(t.clone(), *origin);
         }
         if self.state != Normal {
             self.overlay.clear();
@@ -561,9 +620,10 @@ impl CellMap {
             }
             KeyCode::Char('x') if key_event.modifiers == KeyModifiers::CONTROL => {
                 if let Some(i) = self.token_at()
+                    && let Some(v) = self.tokens.get_mut(&i)
                     && self.state == Normal
                 {
-                    self.tokens.remove(i);
+                    v.pop();
                 }
             }
             KeyCode::Char('x') => {
@@ -593,15 +653,17 @@ impl CellMap {
                 }
             }
             KeyCode::Char('m') => {
-                if let Some(i) = self.token_at()
-                    && self.state == Normal
+                if let Active(Mode::MovingToken(..)) = self.state {
+                    self.commit();
+                } else if self.state == Normal
+                    && let Some(origin) = self.token_at()
+                    && let Some(v) = self.tokens.get_mut(&origin)
+                    && let Some(t) = v.pop()
                 {
                     self.cursor.save_position();
-                    self.state = Active(Mode::MovingToken(i, self.tokens[i].pos));
-                    self.cursor.character = self.tokens[i].character;
-                    self.cursor.fg_color = self.tokens[i].fg_color;
-                } else if let Active(Mode::MovingToken(..)) = self.state {
-                    self.commit();
+                    self.state = Active(Mode::MovingToken(t.clone(), origin));
+                    self.cursor.character = t.character;
+                    self.cursor.fg_color = t.fg_color;
                 }
             }
             _ => {}
@@ -653,20 +715,22 @@ impl Widget for &CellMap {
         // TODO A way to implement key hints
         // let x = key_hints!(("x", "Borrar"), ("d", "Borrar token"));
 
-        for t in &self.tokens {
-            if t.pos.x <= self.offset.x
-                || t.pos.x > self.offset.x + self.visible.0
-                || t.pos.y <= self.offset.y
-                || t.pos.y > self.offset.y + self.visible.1
-            {
-                continue;
+        for (pos, tokens) in &self.tokens {
+            if let Some(t) = tokens.last() {
+                if pos.x <= self.offset.x
+                    || pos.x > self.offset.x + self.visible.0
+                    || pos.y <= self.offset.y
+                    || pos.y > self.offset.y + self.visible.1
+                {
+                    continue;
+                }
+                let screen_x = area.x + pos.x - self.offset.x;
+                let screen_y = area.y + pos.y - self.offset.y;
+                buf[(screen_x, screen_y)]
+                    .set_char(t.character)
+                    .set_fg(t.fg_color)
+                    .set_style(Modifier::BOLD);
             }
-            let screen_x = area.x + t.pos.x - self.offset.x;
-            let screen_y = area.y + t.pos.y - self.offset.y;
-            buf[(screen_x, screen_y)]
-                .set_char(t.character)
-                .set_fg(t.fg_color)
-                .set_style(Modifier::BOLD);
         }
 
         buf[(area.x + self.cursor.pos.x, area.y + self.cursor.pos.y)]
@@ -685,13 +749,7 @@ impl Widget for &CellMap {
         });
         title.push_span(format!(" {:?} ", self.offset));
 
-        let current_color = Line::from(format!(
-            "COLOR: {:?} | {} ",
-            self.brush,
-            self.token_at()
-                .map(|i| self.tokens[i].to_string())
-                .unwrap_or_default()
-        ));
+        let current_color = Line::from(format!("COLOR: {:?}", self.brush,));
 
         let block = Block::bordered()
             .title(title)
