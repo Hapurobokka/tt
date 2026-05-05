@@ -309,20 +309,10 @@ impl CellMap {
 
         let mut tokens = HashMap::<Position, Vec<Token>>::new();
         for t in repr.tokens {
-            if let Some(v) = tokens.get_mut(&t.position) {
-                v.push(Token {
-                    fg_color: t.fg_color,
-                    character: t.character,
-                });
-            } else {
-                tokens.insert(
-                    t.position,
-                    vec![Token {
-                        fg_color: t.fg_color,
-                        character: t.character,
-                    }],
-                );
-            }
+            tokens.entry(t.position).or_default().push(Token {
+                fg_color: t.fg_color,
+                character: t.character,
+            });
         }
 
         Ok(Self {
@@ -491,11 +481,7 @@ impl CellMap {
     }
 
     fn push_token_to_cell(&mut self, t: Token, pos: Position) {
-        if let Some(v) = self.tokens.get_mut(&pos) {
-            v.push(t);
-        } else {
-            self.tokens.insert(pos, vec![t]);
-        }
+        self.tokens.entry(pos).or_default().push(t);
     }
 
     fn commit(&mut self) {
@@ -772,6 +758,9 @@ mod tests {
     use super::*;
     use ratatui::style::Color;
 
+    #[derive(Serialize, Deserialize)]
+    struct ColorWrapper(#[serde(with = "color_serde")] Color);
+
     #[test]
     fn test_color_roundtrip() {
         let colors = [
@@ -792,45 +781,54 @@ mod tests {
         }
     }
 
-    // Wrapper auxiliar para poder serializar Color solo en el test
-    #[derive(Serialize, Deserialize)]
-    struct ColorWrapper(#[serde(with = "color_serde")] Color);
+    #[test]
+    fn test_token_repr_roundtrip() {
+        let token = TokenRepr {
+            position: Position { x: 3, y: 7 },
+            character: 'G',
+            fg_color: Color::Green,
+        };
+        let serialized = serde_json::to_string(&token).unwrap();
+        let deserialized: TokenRepr = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(token, deserialized);
+    }
 
-    // #[test]
-    // fn test_cell_roundtrip() {
-    //     let cell = Cell {
-    //         bg_color: Color::Black,
-    //         fg_color: Color::White,
-    //         character: 'A',
-    //     };
+    #[test]
+    fn test_token_stack_order_preserved() {
+        // Two tokens stacked at the same position — bottom first, top last.
+        let pos = Position { x: 2, y: 2 };
+        let ms = MapState {
+            size: (10, 10),
+            cells: vec![],
+            tokens: vec![
+                TokenRepr {
+                    position: pos,
+                    character: 'A',
+                    fg_color: Color::Red,
+                },
+                TokenRepr {
+                    position: pos,
+                    character: 'B',
+                    fg_color: Color::Blue,
+                },
+            ],
+        };
 
-    //     let serialized = serde_json::to_string(&cell).unwrap();
-    //     let deserialized: Cell = serde_json::from_str(&serialized).unwrap();
+        let json = serde_json::to_string(&ms).unwrap();
+        let loaded: MapState = serde_json::from_str(&json).unwrap();
 
-    //     assert_eq!(cell.bg_color, deserialized.bg_color);
-    //     assert_eq!(cell.fg_color, deserialized.fg_color);
-    //     assert_eq!(cell.character, deserialized.character);
-    // }
+        // Rebuild the HashMap the same way load_map does.
+        let mut tokens = HashMap::<Position, Vec<Token>>::new();
+        for t in loaded.tokens {
+            tokens.entry(t.position).or_default().push(Token {
+                fg_color: t.fg_color,
+                character: t.character,
+            });
+        }
 
-    // #[test]
-    // fn test_color_json_format() {
-    //     // Verifica que el JSON quede como esperamos visualmente
-    //     let cell = Cell {
-    //         bg_color: Color::Black,
-    //         fg_color: Color::Red,
-    //         character: 'X',
-    //     };
-
-    //     let serialized = serde_json::to_string(&cell).unwrap();
-    //     assert!(serialized.contains("\"black\""));
-    //     assert!(serialized.contains("\"red\""));
-    // }
-
-    // #[test]
-    // fn test_unknown_color_fails() {
-    //     // Un color desconocido debe fallar limpiamente
-    //     let bad_json = r#"{"bg_color":"purple","fg_color":"white","character":"A"}"#;
-    //     let result: Result<Cell, _> = serde_json::from_str(bad_json);
-    //     assert!(result.is_err());
-    // }
+        let stack = tokens.get(&pos).unwrap();
+        assert_eq!(stack[0].character, 'A');
+        assert_eq!(stack[1].character, 'B');
+        assert_eq!(stack.last().unwrap().character, 'B');
+    }
 }
