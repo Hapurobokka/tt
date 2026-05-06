@@ -69,6 +69,7 @@ Antes del layout, el código se reorganiza:
 - [ ] `:w <nombre>` guarda el mapa actual en `<nombre>.json`
 - [ ] `:e <nombre>` carga un mapa desde `<nombre>.json` y reemplaza el estado actual
 - [ ] Si el archivo no existe o es inválido, se muestra un mensaje de error en la barra inferior
+- [ ] Cargar un mapa directamente desde la línea de comandos (ej: `tt mapa.json`)
 
 ### Criterio de éxito
 

@@ -1,5 +1,5 @@
+mod cell_map;
 mod color_serde;
-mod map_cell;
 mod minibuffer;
 
 use std::io;
@@ -10,11 +10,10 @@ use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout},
-    style::Color,
 };
 
 use crate::{
-    map_cell::{CellMap, MapEvent, Mode},
+    cell_map::{CellMap, MapEvent, Mode},
     minibuffer::{MiniBuffer, MiniBufferEvent},
 };
 
@@ -68,10 +67,10 @@ impl App {
     const fn handle_minibuffer_events(&mut self, ev: &MiniBufferEvent) {
         match ev {
             MiniBufferEvent::UnfocusMB => {
-                self.cell_map.set_mode(map_cell::State::Normal);
+                self.cell_map.set_mode(cell_map::State::Normal);
                 self.focus = Focus::Map;
             }
-            MiniBufferEvent::CommandSubmited(_) => todo!(),
+            _ => todo!(),
         }
     }
 
@@ -80,22 +79,13 @@ impl App {
             MapEvent::Quit => self.exit = true,
             MapEvent::CommandFocus => {
                 self.cell_map
-                    .set_mode(map_cell::State::Active(Mode::Prompt));
+                    .set_mode(cell_map::State::Active(Mode::Prompt));
                 self.minibuffer.on_enter();
                 self.focus = Focus::MiniBuffer;
             }
-            MapEvent::SaveMap => match self.cell_map.save_map() {
-                Ok(msg) => self.minibuffer.set_text(msg, Color::Green),
-                Err(err) => self.minibuffer.set_text(format!("{err}"), Color::Red),
-            },
-            MapEvent::LoadedMap => match map_cell::CellMap::load_map() {
-                Ok(new_map) => {
-                    self.cell_map = new_map;
-                    self.minibuffer
-                        .set_text(String::from("Map loaded correctly :3"), Color::Green);
-                }
-                Err(err) => self.minibuffer.set_text(format!("{err}"), Color::Red),
-            },
+            MapEvent::StatusMessage(msg, clr) => {
+                self.minibuffer.set_text(msg.clone(), *clr);
+            }
         }
     }
 

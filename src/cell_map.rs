@@ -17,6 +17,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::ops::Add;
 
+use MapEvent::{CommandFocus, Quit, StatusMessage};
 use State::{Active, Normal};
 use serde::{Deserialize, Serialize};
 
@@ -75,6 +76,7 @@ pub struct CellMap {
     brush: Brush,
     offset: Position,
     visible: (u16, u16),
+    pub filename: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -133,8 +135,7 @@ pub struct Token {
 pub enum MapEvent {
     Quit,
     CommandFocus,
-    SaveMap,
-    LoadedMap,
+    StatusMessage(String, Color),
 }
 
 impl fmt::Display for Token {
@@ -211,6 +212,7 @@ impl CellMap {
             char_i: 0,
             state: Normal,
             brush: Brush::BgColor(Color::White),
+            filename: None,
         }
     }
 
@@ -228,9 +230,7 @@ impl CellMap {
         }
     }
 
-    pub fn save_map(&self) -> Result<String> {
-        // might move to a map later
-        // cause this could be much more efficient
+    pub fn save_map(&mut self, filename: String) -> Result<String> {
         let cells = self
             .cells
             .iter()
@@ -272,14 +272,15 @@ impl CellMap {
             tokens,
         };
         let j = serde_json::to_string(&ms).wrap_err("Failed to serialize map")?;
-        let mut f = File::create("test.json").wrap_err("Failed to open file 'test.json'")?;
+        let mut f = File::create(&filename).wrap_err("Failed to open file 'test.json'")?;
         f.write(j.as_bytes())
             .wrap_err("Failed to write to file 'test.json'")?;
+        self.filename = Some(filename);
         Ok(String::from("Succesfully written to 'test.json'"))
     }
 
-    pub fn load_map() -> Result<Self> {
-        let mut f = File::open("test.json")?;
+    pub fn load_map(&mut self, filename: String) -> Result<()> {
+        let mut f = File::open(&filename)?;
         let mut buffer = String::new();
 
         let _ = f.read_to_string(&mut buffer)?;
@@ -322,25 +323,26 @@ impl CellMap {
             });
         }
 
-        Ok(Self {
-            size: repr.size,
-            cursor: Cursor {
-                pos: Position { x: 1, y: 1 },
-                prev_position: Position { x: 1, y: 1 },
-                character: '@',
-                fg_color: Color::Yellow,
-            },
-            offset: Position { x: 0, y: 0 },
-            visible: (0, 0),
-            cells,
-            overlay: HashMap::new(),
-            tokens,
-            bg_color_i: 0,
-            fg_color_i: 0,
-            char_i: 0,
-            state: Normal,
-            brush: Brush::BgColor(Color::White),
-        })
+        self.size = repr.size;
+        self.cursor = Cursor {
+            pos: Position { x: 1, y: 1 },
+            prev_position: Position { x: 1, y: 1 },
+            character: '@',
+            fg_color: Color::Yellow,
+        };
+        self.cells = cells;
+        self.tokens = tokens;
+        self.offset = Position { x: 0, y: 0 };
+        self.visible = (0, 0);
+        self.overlay = HashMap::new();
+        self.bg_color_i = 0;
+        self.fg_color_i = 0;
+        self.char_i = 0;
+        self.state = Normal;
+        self.brush = Brush::BgColor(Color::White);
+        self.filename = Some(filename);
+
+        Ok(())
     }
 
     fn delete(&mut self) {
@@ -561,22 +563,21 @@ impl CellMap {
     }
 
     fn handle_token_placement(&mut self, key_event: KeyEvent) -> bool {
-        if let KeyCode::Char(c) = key_event.code {
-            if self.state == Active(Mode::PlacingToken { character: None })
-                && !key_event.modifiers.contains(KeyModifiers::CONTROL)
-            {
-                if c != ' ' {
-                    self.state = Active(Mode::PlacingToken { character: Some(c) });
-                    self.cursor.fg_color = PALETTE[self.fg_color_i];
-                    self.cursor.character = c;
-                }
-                return true;
+        if let KeyCode::Char(c) = key_event.code
+            && self.state == Active(Mode::PlacingToken { character: None })
+            && !key_event.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            if c != ' ' {
+                self.state = Active(Mode::PlacingToken { character: Some(c) });
+                self.cursor.fg_color = PALETTE[self.fg_color_i];
+                self.cursor.character = c;
             }
+            return true;
         }
         false
     }
 
-    fn handle_movement(&mut self, key_event: KeyEvent) -> bool {
+    const fn handle_movement(&mut self, key_event: KeyEvent) -> bool {
         match key_event.code {
             KeyCode::Left | KeyCode::Char('h') => self.move_cursor(-1, 0),
             KeyCode::Right | KeyCode::Char('l') => self.move_cursor(1, 0),
@@ -591,7 +592,7 @@ impl CellMap {
         true
     }
 
-    fn handle_brush_selection(&mut self, key_event: KeyEvent) -> bool {
+    const fn handle_brush_selection(&mut self, key_event: KeyEvent) -> bool {
         match key_event.code {
             KeyCode::Tab => match self.brush {
                 Brush::BgColor(_) => self.brush = Brush::FgColor(PALETTE[self.fg_color_i]),
@@ -684,12 +685,24 @@ impl CellMap {
         true
     }
 
-    fn handle_global_commands(&self, key_event: KeyEvent) -> Option<MapEvent> {
+    fn handle_global_commands(&mut self, key_event: KeyEvent) -> Option<MapEvent> {
         match key_event.code {
-            KeyCode::Char('q') => Some(MapEvent::Quit),
-            KeyCode::Char(':') => Some(MapEvent::CommandFocus),
-            KeyCode::Char('s') => Some(MapEvent::SaveMap),
-            KeyCode::Char('L') => Some(MapEvent::LoadedMap),
+            KeyCode::Char('q') => Some(Quit),
+            KeyCode::Char(':') => Some(CommandFocus),
+            KeyCode::Char('s') => match self.save_map("test.json".to_string()) {
+                Ok(_) => Some(StatusMessage(
+                    "Map saved correctly :3".to_string(),
+                    Color::Green,
+                )),
+                Err(err) => Some(StatusMessage(err.to_string(), Color::Red)),
+            },
+            KeyCode::Char('L') => match self.load_map("test.json".to_string()) {
+                Ok(()) => Some(StatusMessage(
+                    "Map loaded correctly :3".to_string(),
+                    Color::Green,
+                )),
+                Err(err) => Some(StatusMessage(err.to_string(), Color::Red)),
+            },
             _ => None,
         }
     }
@@ -743,6 +756,29 @@ impl CellMap {
             }
         }
     }
+
+    const fn get_mode_prompt(&self) -> &str {
+        match self.state {
+            Active(Mode::Drawing | Mode::Rectangle { anchor: _ }) => "DRAWING",
+            Active(Mode::DeletingTerrain | Mode::DeletingRect { anchor: _ }) => "DELETING",
+            Normal => "EXPLORING",
+            Active(Mode::MovingToken(..)) => "MOVING",
+            Active(Mode::PlacingToken { character: None }) => "PLACING (waiting...)",
+            Active(Mode::PlacingToken { character: Some(_) }) => "PLACING (be nice!)",
+            Active(Mode::Prompt) => "PROMPTING...",
+        }
+    }
+
+    const fn get_mode_color(&self) -> Color {
+        match self.state {
+            Active(Mode::Drawing | Mode::Rectangle { anchor: _ }) => Color::Magenta,
+            Active(Mode::DeletingTerrain | Mode::DeletingRect { anchor: _ }) => Color::Red,
+            Normal => Color::White,
+            Active(Mode::MovingToken(..)) => Color::Yellow,
+            Active(Mode::PlacingToken { character: _ }) => Color::Cyan,
+            Active(Mode::Prompt) => Color::Green,
+        }
+    }
 }
 
 // macro_rules! key_hints {
@@ -785,30 +821,18 @@ impl Widget for &CellMap {
             .set_fg(self.cursor.fg_color)
             .set_style(Modifier::BOLD);
 
-        let mut title = Line::from(match self.state {
-            Active(Mode::Drawing | Mode::Rectangle { anchor: _ }) => "DRAWING",
-            Active(Mode::DeletingTerrain | Mode::DeletingRect { anchor: _ }) => "DELETING",
-            Normal => "EXPLORING",
-            Active(Mode::MovingToken(..)) => "MOVING",
-            Active(Mode::PlacingToken { character: None }) => "PLACING (waiting...)",
-            Active(Mode::PlacingToken { character: Some(_) }) => "PLACING (be nice!)",
-            Active(Mode::Prompt) => "PROMPTING...",
-        });
-        title.push_span(format!(" {:?} ", self.offset));
+        let title = Line::from(vec![
+            self.get_mode_prompt().into(),
+            " ".into(),
+            self.filename.as_ref().map_or("Untitled", |f| f).into(),
+        ]);
 
         let current_color = Line::from(format!("COLOR: {:?}", self.brush,));
 
         let block = Block::bordered()
             .title(title)
             .title_bottom(current_color)
-            .border_style(match self.state {
-                Active(Mode::Drawing | Mode::Rectangle { anchor: _ }) => Color::Magenta,
-                Active(Mode::DeletingTerrain | Mode::DeletingRect { anchor: _ }) => Color::Red,
-                Normal => Color::White,
-                Active(Mode::MovingToken(..)) => Color::Yellow,
-                Active(Mode::PlacingToken { character: _ }) => Color::Cyan,
-                Active(Mode::Prompt) => Color::Green,
-            })
+            .border_style(self.get_mode_color())
             .border_set(border::THICK);
         block.render(area, buf);
     }
